@@ -1,0 +1,23 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Added by DVC
+/artifacts
+
+# Additional items
+.DS_Store
+.idea
+.python-version
+.env
+credentials.json
+notebooks/
+logs/
+.ruff_cache/
