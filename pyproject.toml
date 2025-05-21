@@ -1,0 +1,10 @@
+[project]
+name = "src"
+version = "0.1.0"
+description = "Retrieval Augmented Generation (RAG) over YouTube video transcripts"
+readme = "README.md"
+requires-python = "==3.10.14"
+dependencies = [
+    "dvc>=3.59.2",
+    "dvc-gdrive>=3.0.1",
+]
