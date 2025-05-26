@@ -1,25 +1,16 @@
 youtube_channel_ids:
   - UC8wZnXYK_CGKlBcZp-GxYPA
-  - UCgBncpylJ1kiVaPyP-PZauQ
-  - UCXUPKJO5MZQN11PqgIvyuvQ
-  - UCPb7xe-MQ0KiJpaKBWFZtTA
   - UCDq7SjbgRKty5TgGafW8Clg
-  - UCadVGkh-CrparnJIgmv5Iuw
-  - UCZovC61jTNT1aQ_JDFoeZwQ
-  - UCn8ujwUInbJkBhffxqAPBVQ
-  - UCRM1urw2ECVHH7ojJw8MXiQ
-  - UCtAcpQcYerN8xxZJYTfWBMw
-  - UCu7lQE-L5gzt8aD7zuuufjw
-  - UCoW_WzQNJVAjxo4osNAxd_g
-  - UCgLxmJ8xER7Y7sywMN5SfWg
   - UC-zVytOQB62OwMhKRi0TDvg
+  - UCadVGkh-CrparnJIgmv5Iuw
+  - UCgBncpylJ1kiVaPyP-PZauQ
+  - UCgLxmJ8xER7Y7sywMN5SfWg
+  - UCZovC61jTNT1aQ_JDFoeZwQ
+  - UCoW_WzQNJVAjxo4osNAxd_g
   - UCAEOtPgh29aXEt31O17Wfjg
+  - UCtAcpQcYerN8xxZJYTfWBMw
   - UC_CzsS7UTjcxJ-xXp1ftxtA
-  - UCdEov4L0bpJ_h6W3sJxkfUA
-  - UC6P9lh2AN6hYC1mi97aU9HA
-  - UCCezIgC97PvUuR4_gbFUs5g
-  - UCtYLUTtgS3k1Fg4y5tAhLbw
-  - UCswGK0lhZXiN8RFjEUFTUWw
+  - UCn8ujwUInbJkBhffxqAPBVQ
 max_results: 50
 chunk_size: 512
 embedding_model: nomic-ai/modernbert-embed-base
