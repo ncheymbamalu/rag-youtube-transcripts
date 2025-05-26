@@ -5,6 +5,54 @@ description = "Retrieval Augmented Generation (RAG) over YouTube video transcrip
 readme = "README.md"
 requires-python = "==3.10.14"
 dependencies = [
+    "chonkie>=1.0.7",
     "dvc>=3.59.2",
     "dvc-gdrive>=3.0.1",
+    "groq>=0.25.0",
+    "httpx>=0.28.1",
+    "ipykernel>=6.29.5",
+    "ipywidgets>=8.1.7",
+    "loguru>=0.7.3",
+    "nbformat>=5.10.4",
+    "numpy>=2.2.6",
+    "omegaconf>=2.3.0",
+    "pandas>=2.2.3",
+    "polars>=1.30.0",
+    "pyarrow>=20.0.0",
+    "python-dotenv>=1.1.0",
+    "sentence-transformers>=4.1.0",
+    "torch>=2.7.0",
+    "torchvision>=0.22.0",
+    "tqdm>=4.67.1",
+    "youtube-transcript-api>=1.0.3",
 ]
+
+[dependency-groups]
+dev = [
+    "isort>=6.0.1",
+    "pylint>=3.3.7",
+    "pytest>=8.3.5",
+    "ruff>=0.11.10",
+]
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+line_length = 100
+indent = 4
+lines_between_types = 1
+known_first_party = ["src"]
+default_section = "THIRDPARTY"
+sections = ["FUTURE", "STDLIB", "THIRDPARTY", "FIRSTPARTY", "LOCALFOLDER"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
