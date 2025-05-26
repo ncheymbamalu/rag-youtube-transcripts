@@ -186,12 +186,12 @@ def encode_transcripts(
     model: SentenceTransformer = embedding_model,
     chunk_size: int = Config.load_params("chunk_size"),
 ) -> pl.DataFrame:
-    """Converts each YouTube video transcript into smaller documents (chunks) and
-    generates embeddings for each chunk.
+    """Splits each YouTube video transcript into smaller contextualized chunks and
+    generates embeddings for each.
 
     Args:
-        data (pl.DataFrame): YouTube video transcripts and corresponding metadata, that is,
-        video ID, creation date, and title.
+        data (pl.DataFrame): YouTube video transcripts and corresponding metadata,
+        that is, video ID, creation date, and title.
         model (SentenceTransformer): Bi-encoder text embedding model that's used to
         convert a string of text to embeddings (1-D array of floating point numbers).
         Defaults to embedding_model.
