@@ -2,10 +2,10 @@
 
 import time
 
-from functools import reduce
-from multiprocessing import Pool
-
 import polars as pl
+
+from joblib import Parallel, delayed
+from tqdm import tqdm
 
 from src.config import Config
 from src.logger import logger
@@ -18,18 +18,21 @@ def main() -> None:
     generates their embeddings, and writes the resulting data to ./artifacts/data.
     """
     try:
-        # a list of YouTube video IDs whose transcripts have already been fetched
-        video_ids: list[str] = pl.read_parquet(Config.transcripts)["video_id"].to_list()
-
         # fetch the YouTube video transcripts
-        with Pool() as pool:
-            data: pl.DataFrame = (
-                reduce(
-                    lambda left, right: pl.concat((left, right), how="vertical"),
-                    pool.imap(fetch_transcripts, Config.load_params("youtube_channel_ids"))
-                )
-                .filter(~pl.col("video_id").is_in(video_ids))
+        dfs: list[pl.DataFrame] = Parallel(n_jobs=-1)(
+            delayed(fetch_transcripts)(youtube_channel_id)
+            for youtube_channel_id in tqdm(
+                iterable=Config.load_params("youtube_channel_ids"),
+                desc="Fetching YouTube video transcripts"
             )
+        )
+
+        # filter out transcripts that already exist in ./artifacts/data/transcripts.parquet
+        video_ids: list[str] = pl.read_parquet(Config.transcripts)["video_id"].to_list()
+        data: pl.DataFrame = (
+            pl.concat(dfs, how="vertical")
+            .filter(~pl.col("video_id").is_in(video_ids))
+        )
         if data.is_empty():
             logger.info("There are no new transcripts. Skipping the embedding process.")
         else:
@@ -57,7 +60,7 @@ def main() -> None:
                     ),
                     how="vertical"
                 )
-                .sort(by="video_id")
+                .sort(by=["video_id", "chunk_index"])
                 .write_parquet(Config.embeddings)
             )
             logger.info(

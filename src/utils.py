@@ -14,7 +14,6 @@ from groq.types.chat import ChatCompletion
 from httpx import Client, Response
 from sentence_transformers import SentenceTransformer
 from youtube_transcript_api import YouTubeTranscriptApi
-from youtube_transcript_api.proxies import WebshareProxyConfig
 
 from src.config import Config
 from src.logger import logger
@@ -74,15 +73,7 @@ def fetch_transcripts(
                     try:
                         transcript: str = " ".join(
                             snippet.text.strip().lower()
-                            for snippet in (
-                                YouTubeTranscriptApi(
-                                    proxy_config=WebshareProxyConfig(
-                                        proxy_username=os.getenv("WEBSHARE_PROXY_USERNAME"),
-                                        proxy_password=os.getenv("WEBSHARE_PROXY_PASSWORD")
-                                    )
-                                )
-                                .fetch(video_id)
-                            )
+                            for snippet in YouTubeTranscriptApi().fetch(video_id)
                         )
                         records.append(dict(zip(schema, record + [transcript])))
                         logger.info(f"SUCCESS: The transcript for `{title}` has been fetched.")
@@ -221,12 +212,22 @@ def encode_transcripts(
                 )
                 for chunk in chunks
             ]
-            video_ids: list[dict[str, str]] = data.select("video_id")[idx].to_dicts() * len(chunks)
-            records: list[dict[str, str]] = [
-                video_id | {"embedding": embedding}
-                for video_id, embedding in zip(video_ids, embeddings)
+            video_ids: list[str] = [data[idx, "video_id"]] * len(chunks)
+            records: list[dict[str, int | str]] = [
+                {
+                    "video_id": video_id,
+                    "chunk_index": idx + 1,
+                    "chunk": chunk,
+                    "embedding": emb
+                }
+                for idx, (video_id, chunk, emb) in enumerate(zip(video_ids, chunks, embeddings))
             ]
             dfs.append(pl.DataFrame(records))
-        return pl.concat(dfs, how="vertical").sort(by="video_id")
+        data = (
+            pl.concat(dfs, how="vertical")
+            .cast({"chunk_index": pl.Int16})
+            .sort(by=["video_id", "chunk_index"])
+        )
+        return data
     except Exception as e:
         raise e
