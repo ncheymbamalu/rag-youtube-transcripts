@@ -25,3 +25,5 @@ max_output_tokens:
   contextual_chunking: 1024
   rag: 4096
 k: 3
+threshold: 0.9
+youtube_search_url: https://www.youtube.com/results?search_query

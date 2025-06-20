@@ -1,18 +1,22 @@
-"""This module contains utility functions that are used by other modules."""
+"""This module contains objects and functions that are used in other modules and scripts."""
 
 import json
 import os
+import textwrap
 
 from datetime import datetime
 
+import numpy as np
 import polars as pl
+import torch
 
 from chonkie import TokenChunker
 from dotenv import load_dotenv
 from groq import Groq
 from groq.types.chat import ChatCompletion
 from httpx import Client, Response
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import CrossEncoder, SentenceTransformer
+from tqdm import tqdm
 from youtube_transcript_api import YouTubeTranscriptApi
 
 from src.config import Config
@@ -25,6 +29,27 @@ groq_client: Groq = Groq(api_key=os.getenv("GROQ_API_KEY"))
 embedding_model: SentenceTransformer = SentenceTransformer(
     model_name_or_path=Config.load_params("embedding_model"),
     trust_remote_code=True
+)
+
+reranker_model: CrossEncoder = CrossEncoder(
+    model_name_or_path=Config.load_params("reranker_model"),
+    activation_fn=torch.nn.Sigmoid()
+)
+
+knowledge_base: pl.LazyFrame = (
+    pl.scan_parquet(Config.embeddings)
+    .join(
+        other=pl.scan_parquet(Config.transcripts),
+        how="inner",
+        on="video_id"
+    )
+    .sort(by=["video_id", "chunk_index"])
+    .select(
+        "video_id",
+        "title",
+        "chunk",
+        pl.col("embedding").str.json_decode()
+    )
 )
 
 
@@ -199,7 +224,11 @@ def encode_transcripts(
             chunk_overlap=(chunk_size // 10)
         )
         dfs: list[pl.DataFrame] = []
-        for idx, transcript in enumerate(data["transcript"]):
+        for idx, transcript in enumerate(tqdm(
+            iterable=data["transcript"],
+            unit="transcript",
+            desc="Splitting the transcripts into chunks and generating their embeddings"
+        )):
             chunks: list[str] = [
                 add_context_to_chunk(transcript, chunk.text.strip())
                 for chunk in chunker(transcript)
@@ -229,5 +258,87 @@ def encode_transcripts(
             .sort(by=["video_id", "chunk_index"])
         )
         return data
+    except Exception as e:
+        raise e
+
+
+def get_semantic_search_results(
+    query: str,
+    k: int = Config.load_params("k"),
+    threshold: float = Config.load_params("threshold"),
+) -> pl.DataFrame:
+    """Returns a pl.DataFrame that contains the title and URL of the top k
+    YouTube videos whose chunk has the highest degree of semantic similarity
+    with the input query.
+
+    Args:
+        query (str): Input query
+        k (int): Number of results to return. Defaults to Config.load_params("k").
+        threshold (float, optional): Threshold probability used to filter out less
+        relevant results. Defaults to Config.load_params("threshold").
+
+    Returns:
+        pl.DataFrame: Title and URL of the top k YouTube videos whose chunk has the
+        strongest contextual relationship with the input query. 
+    """
+    try:
+        return (
+            knowledge_base
+            .with_columns(
+                pl.Series(
+                    name="cosine_similarity",
+                    values=(
+                        np
+                        .array(
+                            knowledge_base.collect()["embedding"].to_list()
+                        )
+                        .dot(
+                            embedding_model
+                            .encode(
+                                f"search_query: {query}",
+                                normalize_embeddings=True
+                            )
+                            .reshape(-1, 1)
+                        )
+                        .ravel()
+                    )
+                )
+            )
+            .filter(pl.col("cosine_similarity").gt(0))
+            .sort(by="cosine_similarity", descending=True)
+            .head(50)
+            .with_columns(
+                pl.concat_str((pl.col("title").str.to_lowercase(), pl.col("chunk")), separator=": ")
+                .map_elements(
+                    lambda chunk: reranker_model.predict((query.lower(), chunk)),
+                    return_dtype=pl.Float64
+                )
+                .alias("relevance_score")
+            )
+            .filter(pl.col("relevance_score").gt(threshold))
+            .sort(by="relevance_score", descending=True)
+            .unique(subset=["title", "video_id"], maintain_order=True)
+            .select(
+                "title",
+                pl.concat_str((pl.lit("https://youtu.be/"), pl.col("video_id"))).alias("url")
+            )
+            .head(k)
+            .collect()
+        )
+    except Exception as e:
+        raise e
+
+
+def wrap_text(text: str) -> str:
+    """Processes a string of text so that it's more readable when printed out.
+
+    Args:
+        text (str): String of text.
+
+    Returns:
+        str: Processed string of text.
+    """
+    try:
+        return textwrap.fill(text, width=100)
     except Exception as e:
         raise e
