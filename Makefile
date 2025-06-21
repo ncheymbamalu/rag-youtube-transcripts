@@ -1,11 +1,11 @@
-.PHONY: venv install check clean etl
+.PHONY: venv install check clean etl api
 
 .DEFAULT_GOAL:=etl
 
 venv: pyproject.toml
 	uv venv && . .venv/bin/activate
 
-install: uv.lock
+install: pyproject.toml
 	uv sync
 
 check: install
@@ -19,3 +19,6 @@ clean:
 etl:
 	dvc pull
 	uv run src/pipelines/etl.py
+
+api:
+	uvicorn src.app.main:app --reload

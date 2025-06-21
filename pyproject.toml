@@ -8,6 +8,7 @@ dependencies = [
     "chonkie>=1.0.7",
     "dvc>=3.59.2",
     "dvc-gdrive>=3.0.1",
+    "fastapi>=0.115.13",
     "groq>=0.25.0",
     "httpx>=0.28.1",
     "ipykernel>=6.29.5",
@@ -25,6 +26,7 @@ dependencies = [
     "torch>=2.7.0",
     "torchvision>=0.22.0",
     "tqdm>=4.67.1",
+    "uvicorn>=0.34.3",
     "youtube-transcript-api==1.1.0",
 ]
 

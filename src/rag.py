@@ -5,21 +5,21 @@ import polars as pl
 from groq.types.chat import ChatCompletion, ChatCompletionMessage
 
 from src.config import Config
-from src.utils import get_semantic_search_results, groq_client, wrap_text
+from src.utils import get_semantic_search_results, groq_client
 
 system_prompt: str = """\
-Answer the query based on the provided information.
+Craft a response to the query based on the provided information.
 
 The provided information may contain the TITLE and URL of one or more YouTube videos, each \
 separated by {delimiter}.
 
-If a YouTube video is referenced while answering the query, always include its corresponding URL.
+If the provided information contains URLs, ALWAYS include them in your response.
 
-If the provided information is insufficient for answering the query, provide useful information \
-from your pre-existing knowledge base, but DO NOT hallucinate or make things up. In addition, \
-include a relevant YouTube link via `{youtube_search_url}={query}`.
+If the provided information is insufficient for crafting a response to the query, provide useful \
+information from your pre-existing knowledge base, but DO NOT hallucinate or make things up. In \
+addition, include a relevant YouTube link via `{youtube_search_url}={query}`.
 
-Responses should be properly formatted and easy to read.\
+Your response should be properly formatted and easy to read.\
 """
 
 
@@ -36,7 +36,7 @@ def create_user_prompt(query: str) -> str:
         delimiter: str = Config.load_params("delimiter")
         results: pl.DataFrame = get_semantic_search_results(query)
         context: str = f"\n{delimiter}\n".join(
-            f"TITLE: {record.get('title')}\nURL:{record.get('url')}"
+            f"TITLE: {record.get('title')}\nURL: {record.get('url')}"
             for record in results.to_dicts()
         )
         user_prompt: str = f"""\
@@ -46,7 +46,7 @@ Use the following information:
 {context}
 ```
 
-to answer the query: {query}\
+to respond to the query: {query}\
         """
         return user_prompt
     except Exception as e:
@@ -95,6 +95,6 @@ def generate_response(
             max_completion_tokens=max_completion_tokens,
         )
         message: ChatCompletionMessage = completion.choices[0].message
-        return wrap_text(message.content)
+        return message.content
     except Exception as e:
         raise e

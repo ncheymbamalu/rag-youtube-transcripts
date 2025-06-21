@@ -26,4 +26,5 @@ max_output_tokens:
   rag: 4096
 k: 3
 threshold: 0.9
+delimiter: ====================
 youtube_search_url: https://www.youtube.com/results?search_query

@@ -23,16 +23,11 @@ def main() -> None:
             delayed(fetch_transcripts)(youtube_channel_id)
             for youtube_channel_id in tqdm(
                 iterable=Config.load_params("youtube_channel_ids"),
+                unit="YouTube Channel ID",
                 desc="Fetching YouTube video transcripts"
             )
         )
-
-        # filter out transcripts that already exist in ./artifacts/data/transcripts.parquet
-        video_ids: list[str] = pl.read_parquet(Config.transcripts)["video_id"].to_list()
-        data: pl.DataFrame = (
-            pl.concat(dfs, how="vertical")
-            .filter(~pl.col("video_id").is_in(video_ids))
-        )
+        data: pl.DataFrame = pl.concat(dfs, how="vertical")
         if data.is_empty():
             logger.info("There are no new transcripts. Skipping the embedding process.")
         else:

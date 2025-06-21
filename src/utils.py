@@ -72,6 +72,7 @@ def fetch_transcripts(
         video ID, creation date, and title.
     """
     try:
+        video_ids: list[str] = pl.read_parquet(Config.transcripts)["video_id"].to_list()
         params: dict[str, int | list[str] | str] = {
             "key": os.getenv("YOUTUBE_DATA_API_KEY"),
             "channelId": youtube_channel_id,
@@ -86,30 +87,30 @@ def fetch_transcripts(
                 records: list[dict[str, datetime | str]] = []
                 for item in response.json().get("items"):
                     video_id: str = item.get("id").get("videoId")
+                    creation_date: str = item.get("snippet").get("publishedAt")
                     title: str = item.get("snippet").get("title")
                     record: list[datetime | str] = [
                         video_id,
-                        datetime.strptime(
-                            item.get("snippet").get("publishedAt"),
-                            "%Y-%m-%dT%H:%M:%S%z"
-                        ),
-                        title
+                        datetime.strptime(creation_date, "%Y-%m-%dT%H:%M:%S%z"),
+                        title,
                     ]
-                    try:
-                        transcript: str = " ".join(
-                            snippet.text.strip().lower()
-                            for snippet in YouTubeTranscriptApi().fetch(video_id)
-                        )
-                        records.append(dict(zip(schema, record + [transcript])))
-                        logger.info(f"SUCCESS: The transcript for `{title}` has been fetched.")
-                    except Exception:
-                        logger.info(
-                            f"ERROR: The transcript is unavailable. `{title}` will be removed."
-                        )
-                        records.append(dict(zip(schema, record + ["unavailable"])))
+                    if video_id in video_ids:
+                        transcript: str = "skip"
+                        logger.info(f"Skipping `{title}`. Its transcript has already been fetched.")
+                    else:
+                        try:
+                            transcript = " ".join(
+                                snippet.text.strip().lower()
+                                for snippet in YouTubeTranscriptApi().fetch(video_id)
+                            )
+                            logger.info(f"SUCCESS: The transcript for `{title}` has been fetched.")
+                        except Exception:
+                            transcript = "skip"
+                            logger.info(f"Skipping `{title}`. Its transcript is unavailable.")
+                    record += [transcript]
+                    records.append(dict(zip(schema, record)))
                 data: pl.DataFrame = (
                     pl.DataFrame(records)
-                    .filter(pl.col("transcript").ne(pl.lit("unavailable")))
                     .with_columns(
                         pl.col(col_name)
                         .str.replace_many(
@@ -118,6 +119,7 @@ def fetch_transcripts(
                         )
                         for col_name in ["title", "transcript"]
                     )
+                    .filter(pl.col("transcript").ne("skip"))
                 )
                 return data
             logger.info(
@@ -295,7 +297,7 @@ def get_semantic_search_results(
                         .dot(
                             embedding_model
                             .encode(
-                                f"search_query: {query}",
+                                f"search_query: {query.lower().strip()}",
                                 normalize_embeddings=True
                             )
                             .reshape(-1, 1)
@@ -306,11 +308,11 @@ def get_semantic_search_results(
             )
             .filter(pl.col("cosine_similarity").gt(0))
             .sort(by="cosine_similarity", descending=True)
-            .head(50)
+            .head(100)
             .with_columns(
                 pl.concat_str((pl.col("title").str.to_lowercase(), pl.col("chunk")), separator=": ")
                 .map_elements(
-                    lambda chunk: reranker_model.predict((query.lower(), chunk)),
+                    lambda chunk: reranker_model.predict((query.lower().strip(), chunk)),
                     return_dtype=pl.Float64
                 )
                 .alias("relevance_score")
