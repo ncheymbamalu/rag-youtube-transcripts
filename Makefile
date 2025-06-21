@@ -1,4 +1,4 @@
-.PHONY: venv install check clean etl api
+.PHONY: venv install check clean etl update_artifacts api
 
 .DEFAULT_GOAL:=etl
 
@@ -9,16 +9,20 @@ install: pyproject.toml
 	uv sync
 
 check: install
-	uv run isort src
-	uv run ruff check src
+	uv run isort src ; uv run ruff check src
 
 clean:
-	rm -rf `find . -type d -name __pycache__`
-	rm -rf .ruff_cache
+	rm -rf `find . -type d -name __pycache__` ; rm -rf .ruff_cache
 
 etl:
-	dvc pull
-	uv run src/pipelines/etl.py
+	dvc pull && uv run src/pipelines/etl.py
+
+update_artifacts:
+	dvc add ./artifacts && \
+	git add artifacts.dvc && \
+	git commit -m "Executing the ETL pipeline" && \
+	dvc push && \
+	git push
 
 api:
 	uvicorn src.app.main:app --reload

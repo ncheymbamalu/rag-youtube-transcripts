@@ -2,9 +2,7 @@
 
 from fastapi import APIRouter
 
-import src.app.endpoint as endpoint
+from src.app import endpoint
 
 router: APIRouter = APIRouter()
-
-
 router.include_router(endpoint.router, prefix="/rag-youtube")

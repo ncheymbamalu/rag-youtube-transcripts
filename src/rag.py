@@ -66,10 +66,10 @@ def generate_response(
         llm (str, optional): The LLM used for RAG.
         Defaults to Config.load_params("llm").get("rag").
         temperature (float | int, optional): Parameter between 0 and 2, inclusive, that
-        contols the randomness of the response. The lower the temperature, the more repetitive
-        the response. Config.load_params("temperature").get("rag").
+        controls the randomness of the response. The lower the temperature, the more repetitive
+        the response. Defaults to Config.load_params("temperature").get("rag").
         max_completion_tokens (int, optional): Maximum number of tokens used to create
-        the response. Config.load_params("max_output_tokens").get("rag").
+        the response. Defaults to Config.load_params("max_output_tokens").get("rag").
 
     Returns:
         str: Response.

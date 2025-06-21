@@ -64,20 +64,11 @@ jobs:
 
       - name: Check for changes
         id: dvc-check
-        run: |
-          dvc status --quiet || echo "CHANGES=true" >> $GITHUB_ENV
+        run: dvc status --quiet || echo "CHANGES=true" >> $GITHUB_ENV
 
       - name: Commit and push changes
         if: env.CHANGES == 'true'
-        run: |
-          dvc add ./artifacts
-          git add artifacts.dvc
-          git commit -m "Executing the ETL pipeline"
-          dvc push
-          git push
+        run: make update_artifacts
 
       - name: Clean up repo
-        run: |
-          make clean
-          rm -rf artifacts
-          rm -rf logs
+        run: make clean ; rm -rf artifacts ; rm -rf logs
