@@ -8,6 +8,12 @@ venv: pyproject.toml
 install: pyproject.toml
 	uv sync
 
+nltk: .venv
+	uv add nltk \
+	&& mkdir -p .venv/nltk_data \
+	&& cd .venv/nltk_data \
+	&& uv run python -m nltk.downloader stopwords 
+
 check: install
 	uv run isort src ; uv run ruff check src
 

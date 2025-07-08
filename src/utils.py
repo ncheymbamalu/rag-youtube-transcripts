@@ -2,6 +2,8 @@
 
 import json
 import os
+import re
+import string
 import textwrap
 
 from datetime import datetime
@@ -15,6 +17,7 @@ from dotenv import load_dotenv
 from groq import Groq
 from groq.types.chat import ChatCompletion
 from httpx import Client, Response
+from nltk.corpus import stopwords
 from sentence_transformers import CrossEncoder, SentenceTransformer
 from tqdm import tqdm
 from youtube_transcript_api import YouTubeTranscriptApi
@@ -46,7 +49,7 @@ knowledge_base: pl.LazyFrame = (
     .sort(by=["video_id", "chunk_index"])
     .select(
         "video_id",
-        "title",
+        pl.col("title").str.to_lowercase(),
         "chunk",
         pl.col("embedding").str.json_decode()
     )
@@ -113,9 +116,10 @@ def fetch_transcripts(
                     pl.DataFrame(records)
                     .with_columns(
                         pl.col(col_name)
+                        .str.replace_all(r"\s{2,}", " ")
                         .str.replace_many(
-                            ["&#39;", "&quot;", "&amp;", "  ", "\n"],
-                            ["'", "'", "&", " ", " "]
+                            ["&#39;", "&quot;", "&amp;"],
+                            ["'", "'", "&"]
                         )
                         for col_name in ["title", "transcript"]
                     )
@@ -264,6 +268,29 @@ def encode_transcripts(
         raise e
 
 
+def preprocess_query(query: str, for_filtering: bool = False) -> str:
+    """Pre-processes the input query.
+
+    Args:
+        query (str): Input query.
+        for_filtering (bool): Boolean that determines if the input query
+        needs to be further processed for pre-retrieval keyword filtering.
+
+    Returns:
+        str: Pre-processed input query.
+    """
+    try:
+        query = re.sub(f"[{string.punctuation}]", " ", query)
+        query = re.sub(r"\s{2,}", " ", query)
+        query = query.strip().lower()
+        return (
+            query if not for_filtering
+            else "|".join(word for word in query.split() if word not in stopwords.words("english"))
+        )
+    except Exception as e:
+        raise e
+
+
 def get_semantic_search_results(
     query: str,
     k: int = Config.load_params("k"),
@@ -284,20 +311,27 @@ def get_semantic_search_results(
         strongest contextual relationship with the input query. 
     """
     try:
-        return (
+        filtered_knowledge_base: pl.LazyFrame = (
             knowledge_base
+            .filter(
+                pl.concat_str(("title", "chunk"), separator=": ")
+                .str.contains(preprocess_query(query, True))
+            )
+        )
+        return (
+            filtered_knowledge_base
             .with_columns(
                 pl.Series(
                     name="cosine_similarity",
                     values=(
                         np
                         .array(
-                            knowledge_base.collect()["embedding"].to_list()
+                            filtered_knowledge_base.collect()["embedding"].to_list()
                         )
                         .dot(
                             embedding_model
                             .encode(
-                                f"search_query: {query.lower().strip()}",
+                                f"search_query: {preprocess_query(query)}",
                                 normalize_embeddings=True
                             )
                             .reshape(-1, 1)
@@ -310,14 +344,14 @@ def get_semantic_search_results(
             .sort(by="cosine_similarity", descending=True)
             .head(100)
             .with_columns(
-                pl.concat_str((pl.col("title").str.to_lowercase(), pl.col("chunk")), separator=": ")
+                pl.concat_str(("title", "chunk"), separator=": ")
                 .map_elements(
-                    lambda chunk: reranker_model.predict((query.lower().strip(), chunk)),
+                    lambda chunk: reranker_model.predict((preprocess_query(query), chunk)),
                     return_dtype=pl.Float64
                 )
                 .alias("relevance_score")
             )
-            .filter(pl.col("relevance_score").gt(threshold))
+            .filter(pl.col("relevance_score").ge(threshold))
             .sort(by="relevance_score", descending=True)
             .unique(subset=["title", "video_id"], maintain_order=True)
             .select(
