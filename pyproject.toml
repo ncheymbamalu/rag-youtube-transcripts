@@ -22,7 +22,6 @@ dependencies = [
     "pandas>=2.2.3",
     "polars>=1.30.0",
     "pyarrow>=20.0.0",
-    "pyspellchecker>=0.8.3",
     "python-dotenv>=1.1.0",
     "sentence-transformers>=4.1.0",
     "torch>=2.7.0",
