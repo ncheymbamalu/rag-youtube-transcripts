@@ -1,6 +1,12 @@
 outs:
+<<<<<<< HEAD
 - md5: 43e15bfb845fb5a123dc59635fcc4eec.dir
   size: 284578941
   nfiles: 3
+=======
+- md5: 046416087f02ba971823cf96a03afad3.dir
+  size: 279830165
+  nfiles: 4
+>>>>>>> parent of 3518c0d (Executing the ETL pipeline)
   hash: md5
   path: artifacts

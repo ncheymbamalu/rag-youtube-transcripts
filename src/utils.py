@@ -49,7 +49,7 @@ knowledge_base: pl.LazyFrame = (
     .sort(by=["video_id", "chunk_index"])
     .select(
         "video_id",
-        pl.col("title").str.to_lowercase(),
+        "title",
         "chunk",
         pl.col("embedding").str.json_decode()
     )
@@ -268,13 +268,11 @@ def encode_transcripts(
         raise e
 
 
-def preprocess_query(query: str, for_filtering: bool = False) -> str:
+def preprocess_query(query: str) -> str:
     """Pre-processes the input query.
 
     Args:
         query (str): Input query.
-        for_filtering (bool): Boolean that determines if the input query
-        needs to be further processed for pre-retrieval keyword filtering.
 
     Returns:
         str: Pre-processed input query.
@@ -282,11 +280,7 @@ def preprocess_query(query: str, for_filtering: bool = False) -> str:
     try:
         query = re.sub(f"[{string.punctuation}]", " ", query)
         query = re.sub(r"\s{2,}", " ", query)
-        query = query.strip().lower()
-        return (
-            query if not for_filtering
-            else "|".join(word for word in query.split() if word not in stopwords.words("english"))
-        )
+        return query.strip().lower()
     except Exception as e:
         raise e
 
@@ -311,29 +305,29 @@ def get_semantic_search_results(
         strongest contextual relationship with the input query. 
     """
     try:
+        query: str = preprocess_query(query)
+        keywords: str = "|".join(
+            word for word in query.split() if word not in stopwords.words("english")
+        )
         filtered_knowledge_base: pl.LazyFrame = (
             knowledge_base
             .filter(
-                pl.concat_str(("title", "chunk"), separator=": ")
-                .str.contains(preprocess_query(query, True))
+                pl.concat_str((pl.col("title").str.to_lowercase(), "chunk"), separator=": ")
+                .str.contains(keywords)
             )
         )
+        if filtered_knowledge_base.collect().is_empty():
+            return pl.DataFrame({"title": None, "url": None}).cast(pl.String)
         return (
             filtered_knowledge_base
             .with_columns(
                 pl.Series(
                     name="cosine_similarity",
                     values=(
-                        np
-                        .array(
-                            filtered_knowledge_base.collect()["embedding"].to_list()
-                        )
+                        np.array(filtered_knowledge_base.collect()["embedding"].to_list())
                         .dot(
                             embedding_model
-                            .encode(
-                                f"search_query: {preprocess_query(query)}",
-                                normalize_embeddings=True
-                            )
+                            .encode(f"search_query: {query}", normalize_embeddings=True)
                             .reshape(-1, 1)
                         )
                         .ravel()
@@ -344,9 +338,9 @@ def get_semantic_search_results(
             .sort(by="cosine_similarity", descending=True)
             .head(100)
             .with_columns(
-                pl.concat_str(("title", "chunk"), separator=": ")
+                pl.concat_str((pl.col("title").str.to_lowercase(), "chunk"), separator=": ")
                 .map_elements(
-                    lambda chunk: reranker_model.predict((preprocess_query(query), chunk)),
+                    lambda chunk: reranker_model.predict((query, chunk)),
                     return_dtype=pl.Float64
                 )
                 .alias("relevance_score")
