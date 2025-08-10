@@ -13,11 +13,12 @@ Craft a response to the query based on the provided information.
 The provided information may contain the TITLE and URL of one or more YouTube videos, each \
 separated by {delimiter}.
 
-If the provided information contains URLs, ALWAYS include them in your response.
+If the provided information (A) appears to be unrelated to the query, (B) is insufficient for \
+crafting a response to the query, or (C) `None`, disregard it. Instead, provide useful information \
+from your pre-existing knowledge base, but DO NOT hallucinate or make things up. In addition, \
+include a relevant YouTube URL via `{youtube_search_url}={query}`.
 
-If the provided information is insufficient for crafting a response to the query, provide useful \
-information from your pre-existing knowledge base, but DO NOT hallucinate or make things up. In \
-addition, include a relevant YouTube link via `{youtube_search_url}={query}`.
+If the provided information is sufficient, ALWAYS include the TITLE and URL in your response.
 
 Your response should be properly formatted and easy to read.\
 """
