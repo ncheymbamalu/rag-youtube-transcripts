@@ -19,6 +19,7 @@ from groq.types.chat import ChatCompletion
 from httpx import Client, Response
 from nltk.corpus import stopwords
 from sentence_transformers import CrossEncoder, SentenceTransformer
+from spellchecker import SpellChecker
 from tqdm import tqdm
 from youtube_transcript_api import YouTubeTranscriptApi
 
@@ -54,6 +55,8 @@ knowledge_base: pl.LazyFrame = (
         pl.col("embedding").str.json_decode()
     )
 )
+
+spell_checker: SpellChecker = SpellChecker(distance=1)
 
 
 @logger.catch
@@ -268,13 +271,11 @@ def encode_transcripts(
         raise e
 
 
-def preprocess_query(query: str, for_filtering: bool = False) -> str:
+def preprocess_query(query: str) -> str:
     """Pre-processes the input query.
 
     Args:
         query (str): Input query.
-        for_filtering (bool): Boolean that determines if the input query
-        needs to be further processed for pre-retrieval keyword filtering.
 
     Returns:
         str: Pre-processed input query.
@@ -282,7 +283,11 @@ def preprocess_query(query: str, for_filtering: bool = False) -> str:
     try:
         query = re.sub(f"[{string.punctuation}]", " ", query)
         query = re.sub(r"\s{2,}", " ", query)
-        return query.strip().lower()
+        query = " ".join(
+            spell_checker.correction(word) if spell_checker.candidates(word) else word
+            for word in query.strip().lower().split()
+        )
+        return query
     except Exception as e:
         raise e
 
