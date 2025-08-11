@@ -21,7 +21,7 @@ clean:
 	rm -rf `find . -type d -name __pycache__` ; rm -rf .ruff_cache
 
 etl:
-	dvc pull && uv run src/pipelines/etl.py
+	git pull && dvc pull && uv run src/pipelines/etl.py
 
 update_artifacts:
 	dvc add ./artifacts && \
