@@ -1,9 +1,6 @@
-.PHONY: venv install check clean etl update_artifacts api
+.PHONY: install nltk check clean etl update_artifacts api
 
 .DEFAULT_GOAL:=etl
-
-venv: pyproject.toml
-	uv venv && . .venv/bin/activate
 
 install: pyproject.toml
 	uv sync
@@ -21,12 +18,12 @@ clean:
 	rm -rf `find . -type d -name __pycache__` ; rm -rf .ruff_cache
 
 etl:
-	git pull && dvc pull && uv run src/pipelines/etl.py
+	git pull && dvc pull && uv run python -Wignore src/pipelines/etl.py
 
 update_artifacts:
 	dvc add ./artifacts && \
 	git add artifacts.dvc && \
-	git commit -m "Executing the ETL pipeline" && \
+	git commit -m "Executing the ETL pipeline and updating ./artifacts.dvc" && \
 	dvc push && \
 	git push
 

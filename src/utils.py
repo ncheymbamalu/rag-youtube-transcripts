@@ -102,7 +102,9 @@ def fetch_transcripts(
                     ]
                     if video_id in video_ids:
                         transcript: str = "skip"
-                        logger.info(f"Skipping `{title}`. Its transcript has already been fetched.")
+                        logger.info(
+                            f"Skipping <green>{title}</green>. It's already been transcribed."
+                        )
                     else:
                         try:
                             transcript = " ".join(
@@ -112,7 +114,9 @@ def fetch_transcripts(
                             logger.info(f"SUCCESS: The transcript for `{title}` has been fetched.")
                         except Exception:
                             transcript = "skip"
-                            logger.info(f"Skipping `{title}`. Its transcript is unavailable.")
+                            logger.info(
+                                f"Skipping <green>{title}</green>. Its transcript is unavailable."
+                            )
                     record += [transcript]
                     records.append(dict(zip(schema, record)))
                 data: pl.DataFrame = (
@@ -126,7 +130,7 @@ def fetch_transcripts(
                         )
                         for col_name in ["title", "transcript"]
                     )
-                    .filter(pl.col("transcript").ne("skip"))
+                    .filter(pl.col("transcript").ne(pl.lit("skip")))
                 )
                 return data
             logger.info(
@@ -141,9 +145,9 @@ def fetch_transcripts(
 def add_context_to_chunk(
     transcript: str,
     chunk: str,
-    llm: str = Config.load_params("llm").get("contextual_chunking"),
-    temperature: float = Config.load_params("temperature").get("contextual_chunking"),
-    max_output_tokens: int = Config.load_params("max_output_tokens").get("contextual_chunking"),
+    llm: str = Config.load_params("llm").contextual_chunking,
+    temperature: float = Config.load_params("temperature").contextual_chunking,
+    max_output_tokens: int = Config.load_params("max_output_tokens").contextual_chunking,
 ) -> str:
     """Adds context to a YouTube video transcript's chunk.
 
@@ -236,7 +240,7 @@ def encode_transcripts(
         for idx, transcript in enumerate(tqdm(
             iterable=data["transcript"],
             unit="transcript",
-            desc="Splitting the transcripts into chunks and generating their embeddings"
+            desc="Splitting transcripts into contextual chunks and generating embeddings for each"
         )):
             chunks: list[str] = [
                 add_context_to_chunk(transcript, chunk.text.strip())
@@ -312,14 +316,17 @@ def get_semantic_search_results(
         strongest contextual relationship with the input query. 
     """
     try:
-        query: str = preprocess_query(query)
+        query = preprocess_query(query)
         keywords: str = "|".join(
             word for word in query.split() if word not in stopwords.words("english")
         )
         filtered_knowledge_base: pl.LazyFrame = (
             knowledge_base
             .filter(
-                pl.concat_str((pl.col("title").str.to_lowercase(), "chunk"), separator=": ")
+                pl.concat_str(
+                    (pl.col("title").str.to_lowercase(), pl.col("chunk")),
+                    separator=": "
+                )
                 .str.contains(keywords)
             )
         )
@@ -332,33 +339,31 @@ def get_semantic_search_results(
                     name="cosine_similarity",
                     values=(
                         np
-                        .array(
-                            filtered_knowledge_base.collect()["embedding"].to_list()
-                        )
+                        .array(filtered_knowledge_base.collect()["embedding"].to_list())
                         .dot(
                             embedding_model
-                            .encode(
-                                f"search_query: {preprocess_query(query)}",
-                                normalize_embeddings=True
-                            )
+                            .encode(f"search_query: {query}", normalize_embeddings=True)
                             .reshape(-1, 1)
                         )
                         .ravel()
                     )
                 )
             )
-            .filter(pl.col("cosine_similarity").gt(0))
+            .filter(pl.col("cosine_similarity").gt(pl.lit(0)))
             .sort(by="cosine_similarity", descending=True)
             .head(100)
             .with_columns(
-                pl.concat_str((pl.col("title").str.to_lowercase(), "chunk"), separator=": ")
+                pl.concat_str(
+                    (pl.col("title").str.to_lowercase(), pl.col("chunk")),
+                    separator=": "
+                )
                 .map_elements(
                     lambda chunk: reranker_model.predict((query, chunk)),
                     return_dtype=pl.Float64
                 )
                 .alias("relevance_score")
             )
-            .filter(pl.col("relevance_score").ge(threshold))
+            .filter(pl.col("relevance_score").ge(pl.lit(threshold)))
             .sort(by="relevance_score", descending=True)
             .unique(subset=["title", "video_id"], maintain_order=True)
             .select(

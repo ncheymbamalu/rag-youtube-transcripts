@@ -56,21 +56,21 @@ to respond to the query: {query}\
 
 def generate_response(
     query: str,
-    llm: str = Config.load_params("llm").get("rag"),
-    temperature: float | int = Config.load_params("temperature").get("rag"),
-    max_completion_tokens: int = Config.load_params("max_output_tokens").get("rag")
+    llm: str = Config.load_params("llm").rag,
+    temperature: float | int = Config.load_params("temperature").rag,
+    max_completion_tokens: int = Config.load_params("max_output_tokens").rag
 ) -> str:
     """Generates a response to the input query.
 
     Args:
         query (str): Input query.
         llm (str, optional): The LLM used for RAG.
-        Defaults to Config.load_params("llm").get("rag").
-        temperature (float | int, optional): Parameter between 0 and 2, inclusive, that
-        controls the randomness of the response. The lower the temperature, the more repetitive
-        the response. Defaults to Config.load_params("temperature").get("rag").
+        Defaults to Config.load_params("llm").rag.
+        temperature (float | int, optional): Parameter between 0 and 2 inclusive,
+        that controls the randomness of the response. The lower the temperature,
+        the more repetitive the response. Defaults to Config.load_params("temperature").rag.
         max_completion_tokens (int, optional): Maximum number of tokens used to create
-        the response. Defaults to Config.load_params("max_output_tokens").get("rag").
+        the response. Defaults to Config.load_params("max_output_tokens").rag.
 
     Returns:
         str: Response.

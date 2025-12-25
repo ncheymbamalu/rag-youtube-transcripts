@@ -15,7 +15,7 @@ from src.utils import encode_transcripts, fetch_transcripts
 @logger.catch
 def main() -> None:
     """Fetches video transcripts and corresponding metadata from a list of YouTube channel IDs,
-    generates their embeddings, and writes the resulting data to ./artifacts/data.
+    generates their embeddings, and writes the resulting data to ./artifacts/data/.
     """
     try:
         # fetch the YouTube video transcripts
@@ -33,13 +33,7 @@ def main() -> None:
         else:
             # update ./artifacts/data/transcripts.parquet
             (
-                pl.concat(
-                    (
-                        data,
-                        pl.read_parquet(Config.transcripts)
-                    ),
-                    how="vertical"
-                )
+                pl.concat((data, pl.read_parquet(Config.transcripts)), how="vertical")
                 .sort(by=["creation_date", "video_id"], descending=[True, False])
                 .write_parquet(Config.transcripts)
             )
