@@ -1,0 +1,10 @@
+*
+
+!README.md
+!pyproject.toml
+!uv.lock
+!Makefile
+!params.yaml
+!src/rag_youtube_transcripts/
+
+src/rag_youtube_transcripts/pipelines/

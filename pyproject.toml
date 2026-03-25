@@ -1,0 +1,60 @@
+[project]
+name = "rag-youtube-transcripts"
+version = "0.1.0"
+description = "Retrieval Augmented Generation (RAG) over YouTube video transcripts"
+readme = "README.md"
+requires-python = "==3.11.*"
+dependencies = [
+    "chonkie>=1.0.7",
+    "dvc>=3.59.2",
+    "dvc-gdrive>=3.0.1",
+    "emoji>=2.15.0",
+    "fastapi>=0.115.13",
+    "groq>=0.25.0",
+    "httpx>=0.28.1",
+    "joblib>=1.5.0",
+    "langchain-text-splitters>=1.1.0",
+    "loguru>=0.7.3",
+    "markitdown>=0.0.2",
+    "nltk>=3.9.1",
+    "numpy==1.26.4",
+    "omegaconf>=2.3.0",
+    "pandas>=2.2.3",
+    "polars>=1.38.0",
+    "pyarrow>=20.0.0",
+    "pyspellchecker>=0.8.3",
+    "python-dotenv>=1.1.0",
+    "scrapetube>=2.6.0",
+    "sentence-transformers>=4.1.0",
+    "torch>=2.7.0",
+    "torchvision>=0.22.0",
+    "tqdm>=4.67.1",
+    "uvicorn>=0.34.3",
+    "youtube-transcript-api==1.1.0",
+]
+
+[dependency-groups]
+dev = [
+    "ipywidgets>=8.1.8",
+    "jupyter>=1.1.1",
+    "pytest>=9.0.2",
+    "ruff>=0.15.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = []
+
+[tool.ruff.lint.isort]
+known-first-party = ["rag_youtube_transcripts"]
+combine-as-imports = true
+force-wrap-aliases = true
+lines-after-imports = 2
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

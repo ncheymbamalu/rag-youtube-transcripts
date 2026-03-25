@@ -1,0 +1,75 @@
+youtube_data_api: https://www.googleapis.com/youtube/v3/search
+youtube_channel_ids:
+  - UC8wZnXYK_CGKlBcZp-GxYPA
+  - UCDq7SjbgRKty5TgGafW8Clg
+  - UC-zVytOQB62OwMhKRi0TDvg
+  - UCCezIgC97PvUuR4_gbFUs5g
+  - UCadVGkh-CrparnJIgmv5Iuw
+  - UCgBncpylJ1kiVaPyP-PZauQ
+  - UCu7lQE-L5gzt8aD7zuuufjw
+  - UCgLxmJ8xER7Y7sywMN5SfWg
+  - UCZovC61jTNT1aQ_JDFoeZwQ
+  - UCoW_WzQNJVAjxo4osNAxd_g
+  - UCAEOtPgh29aXEt31O17Wfjg
+  - UCYFKQl9VMvtnUHxZ9uFx7qw
+  - UCtAcpQcYerN8xxZJYTfWBMw
+  - UC_CzsS7UTjcxJ-xXp1ftxtA
+  - UCn8ujwUInbJkBhffxqAPBVQ
+  - UC8_RSKwbU1OmZWNEoLV1tQg
+max_results: 50
+chunk_size: 512
+max_input_tokens: 102_400
+embedding_model: nomic-ai/modernbert-embed-base
+reranker_model: cross-encoder/ms-marco-MiniLM-L-12-v2
+llm:
+  contextual_chunking: llama-3.1-8b-instant
+  rag: llama-3.3-70b-versatile
+temperature:
+  contextual_chunking: 0.0
+  rag: 1.0
+max_output_tokens:
+  contextual_chunking: 1024
+  rag: 4096
+k: 3
+threshold: 0.9
+delimiter: ====================
+youtube_search_url: https://www.youtube.com/results?search_query
+rag_system_prompt: |
+  Craft a response to the query based on the provided information.
+
+  The provided information may contain the TITLE, URL, START, and END of one or more YouTube \
+  videos, each separated by {delimiter}. The START and END values are fractions of the video's \
+  length and represent the starting and ending marks with where to watch the corresponding URL.
+
+  If the provided information (A) appears to be unrelated to the query, (B) is insufficient for \
+  crafting a response to the query, or (C) `None`, disregard it. Instead, provide useful \
+  information from your pre-existing knowledge base, with sources, but DO NOT hallucinate or make \
+  things up. In addition, include a relevant YouTube URL via `{youtube_search_url}={query}`.
+
+  If the provided information is sufficient, ALWAYS include the TITLE, URL, START, and END in your \
+  response.
+
+  Your response should be properly formatted and easy to read.
+contextual_chunking_system_prompt: |
+  You are an expert in document analysis. Your task is to provide brief, relevant context for a \
+  chunk of text.
+contextual_chunking_user_prompt: |
+  Here is the document:
+  <document>
+  {transcript}
+  </document>
+
+  Here is the chunk of text:
+  <chunk>
+  {chunk}
+  </chunk>
+
+  Provide a concise context (2-4 sentences) for this chunk, considering the following guidelines:
+  1. Identify the main topic or concept discussed in the chunk.
+  2. Mention any relevant information or comparisons from the broader document context.
+  3. If applicable, note how the information contained in the chunk relates to the overall theme \
+  or purpose of the document.
+
+  Please provide a short, succinct context to situate this chunk within the overall document for \
+  the purposes of improving search retrieval of the chunk.
+  Respond only with the context.

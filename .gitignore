@@ -18,6 +18,7 @@ wheels/
 /notebooks
 logs/
 .ruff_cache/
+/bin/rag*.sh
 
 # Added by DVC
 /artifacts

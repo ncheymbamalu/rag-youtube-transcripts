@@ -1,0 +1,12 @@
+services:
+  backend:
+    build: .
+    image: rag_youtube_transcripts
+    container_name: temp
+    ports:
+      - "8080:8000"
+    volumes:
+      - ./artifacts:/rag-youtube-transcripts/artifacts
+      - ./.venv/nltk_data:/rag-youtube-transcripts/.venv/nltk_data
+    env_file:
+      - .env
