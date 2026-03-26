@@ -22,7 +22,7 @@ set +a
 # 5. Set the paths for the Python executable, DVC executable, and ETL pipeline script
 PYTHON=${PROJECT_DIR}/.venv/bin/python
 DVC=${PROJECT_DIR}/.venv/bin/dvc
-SCRIPT=${PROJECT_DIR}/src/pipelines/etl.py
+SCRIPT=${PROJECT_DIR}/src/rag_youtube_transcripts/pipelines/etl.py
 
 # 6. Change directories to the project's home directory and ensure the logs directory exists
 cd $PROJECT_DIR || exit 1
@@ -43,5 +43,5 @@ $GIT add artifacts.dvc && \
 $GIT commit -m "Executing the ETL pipeline and updating ./artifacts.dvc" && \
 $GIT push
 
-# 10. Delete the CHANGES environment variale
+# 10. Delete the CHANGES environment variable
 unset CHANGES
