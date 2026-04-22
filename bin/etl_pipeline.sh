@@ -38,9 +38,9 @@ $DVC status --quiet || export CHANGES="./artifacts/ has been modified."
 # 9. If there were changes, commit and push them to DVC and Git/GitHub
 printenv CHANGES && \
 $DVC add ./artifacts && \
-$DVC push && \
 $GIT add artifacts.dvc && \
 $GIT commit -m "Executing the ETL pipeline and updating ./artifacts.dvc" && \
+$DVC push && \
 $GIT push
 
 # 10. Delete the CHANGES environment variable

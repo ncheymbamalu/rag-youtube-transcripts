@@ -1,4 +1,4 @@
-.PHONY: install clean check fix nltk etl update_artifacts api
+.PHONY: install clean check fix nltk etl update_artifacts api start_container stop_container
 
 .DEFAULT_GOAL:=etl
 
@@ -27,10 +27,20 @@ etl:
 
 update_artifacts:
 	dvc add ./artifacts && \
-	dvc push && \
 	git add artifacts.dvc && \
 	git commit -m "Executing the ETL pipeline and updating ./artifacts.dvc" && \
+	dvc push && \
 	git push
 
 api:
 	uvicorn src.rag_youtube_transcripts.app.main:app --reload
+
+start_container:
+	docker desktop start && \
+	docker compose up -d && \
+	echo "RAG backend will be running on http://localhost:8080/docs shortly ..."
+
+stop_container:
+	docker stop temp && \
+	docker rm temp && \
+	docker desktop stop
