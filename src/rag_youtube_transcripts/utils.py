@@ -427,7 +427,7 @@ def get_semantic_search_results(
             .filter(pl.col("cosine_similarity").gt(0))
             .sort("cosine_similarity", descending=True)
             .drop("embedding", "cosine_similarity")
-            .limit(100)
+            .limit(250)
             .with_columns(
                 pl.concat_str(pl.col("title").str.to_lowercase(), "chunk", separator=": ")
                 .map_elements(
