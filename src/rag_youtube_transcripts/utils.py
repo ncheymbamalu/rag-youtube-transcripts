@@ -41,21 +41,25 @@ RERANKER_MODEL: CrossEncoder = CrossEncoder(
 )
 KNOWLEDGE_BASE: pl.LazyFrame = (
     pl.scan_parquet(Config.Paths.embeddings)
-    .with_columns(
-        pl.col("chunk_index").max().over(pl.col("video_id")).alias("chunk_count")
-    )
+    .with_columns(pl.col("chunk_index").max().over("video_id").alias("chunk_count"))
     .join(
-        other=pl.scan_parquet(Config.Paths.transcripts).select("video_id", "title"),
+        pl.scan_parquet(Config.Paths.transcripts).select("video_id", "title"),
         how="inner",
         on="video_id"
     )
+    .with_columns(
+        ((pl.col("chunk_index") - 1) / pl.col("chunk_count")).round(2).alias("start"),
+        (pl.col("chunk_index") / pl.col("chunk_count")).round(2).alias("end"),
+        pl.col("embedding").str.json_decode(dtype=pl.List(pl.Float64))
+    )
     .select(
         "video_id",
+        "chunk_index",
         "title",
-        ((pl.col("chunk_index") - pl.lit(1)) / pl.col("chunk_count")).round(2).alias("start"),
-        (pl.col("chunk_index") / pl.col("chunk_count")).round(2).alias("end"),
+        "start",
+        "end",
         "chunk",
-        pl.col("embedding").str.json_decode(dtype=pl.List(pl.Float64))
+        "embedding"
     )
     .sort("video_id", "start")
 )
@@ -260,6 +264,93 @@ def encode_transcripts(data: pl.DataFrame) -> pl.DataFrame:
         raise e
 
 
+def create_bm25_dataset(k1: float = 1.5, b: float = 0.75) -> None:
+    """Creates a dataset that stores each token's BM25 score with repect to
+    each contextualized chunk and writes the results to `./artifacts/data/bm25.parquet.`
+    """
+    try:
+        stop_words: frozenset = frozenset([
+            word.translate(str.maketrans("", "", string.punctuation))
+            for word in stopwords.words("english")
+        ])
+
+        # create the base plan
+        # NOTE: each unique (video_id, chunk_index) pair represents a unique chunk
+        plan: pl.LazyFrame = (
+            pl.scan_parquet(Config.Paths.embeddings)
+            .select(
+                "video_id",
+                "chunk_index",
+                (
+                    pl.col("chunk")
+                    .str.to_lowercase()
+                    .str.replace_all(r"[^a-z0-9\s]", "")
+                    .str.replace_all(r"\s+", " ")
+                    .str.strip_chars()
+                    .str.split(" ")
+                    .list.eval(pl.element().filter(~pl.element().is_in(stop_words)))
+                    .alias("tokens")
+                )
+            )
+            .with_columns(pl.col("tokens").list.len().alias("n_tokens"))
+        )
+
+        # get the global stats, that is, average token count and the total number of chunks
+        stats: pl.DataFrame = (
+            plan
+            .select(
+                pl.mean("n_tokens").alias("avg_n_tokens"),
+                pl.len().alias("n_chunks")
+            )
+            .collect()
+        )
+        avg_n_tokens: float = stats.get_column("avg_n_tokens").item()
+        n_chunks: int = stats.get_column("n_chunks").item()
+
+        # create the term frequency plan
+        tf_plan: pl.LazyFrame = (
+            plan
+            .explode("tokens")
+            .rename({"tokens": "token"})
+            .filter(pl.col("token").ne(""))  # removes empty strings
+            .group_by("video_id", "chunk_index", "n_tokens", "token", maintain_order=True)
+            .agg(pl.len().alias("tf"))
+        )
+
+        # create the inverse document frequency plan
+        idf_plan: pl.LazyFrame = (
+            tf_plan
+            .group_by("token")
+            .agg(pl.len().alias("n"))
+            .with_columns(
+                ((n_chunks - pl.col("n") + 0.5) / (pl.col("n") + 0.5) + 1).log().alias("idf")
+            )
+        )
+
+        # calculate the BM25 score for each unique (video_id, chunk_index, token) group and ...
+        # write to `./artifacts/data/bm25.parquet`
+        (
+            tf_plan
+            .join(idf_plan, on="token", maintain_order="left")
+            .with_columns(
+                (
+                    pl.col("idf")
+                    *
+                    (
+                        (pl.col("tf") * (k1 + 1))
+                        /
+                        (pl.col("tf") + k1 * (1 - b + b * (pl.col("n_tokens") / avg_n_tokens)))
+                    )
+                )
+                .alias("score")
+            )
+            .select("video_id", "chunk_index", "token", "score")
+            .sink_parquet(Config.Paths.bm25_data)
+        )
+    except Exception as e:
+        raise e
+
+
 def preprocess_query(query: str) -> str:
     """Pre-processes the input query.
 
@@ -301,26 +392,25 @@ def get_semantic_search_results(
         strongest contextual relationship with the input query. 
     """
     try:
-        query = preprocess_query(query)
-        keywords: str = "|".join(
-            word for word in query.split() if word not in stopwords.words("english")
-        )
+        query = preprocess_query(query) 
         knowledge_base: pl.LazyFrame = (
-            KNOWLEDGE_BASE
-            .filter(
-                pl.concat_str(pl.col("title").str.to_lowercase(), "chunk", separator=": ")
-                .str.contains(keywords)
+            pl.scan_parquet(Config.Paths.bm25_data)
+            .filter(pl.col("token").is_in(query.split()))
+            .group_by("video_id", "chunk_index")
+            .agg(pl.col("score").sum())
+            .sort("score", descending=True)
+            .join(
+                KNOWLEDGE_BASE,
+                how="left",
+                on=["video_id", "chunk_index"],
+                maintain_order="left"
             )
+            .drop("chunk_index", "score")
         )
         if knowledge_base.limit(1).collect().is_empty():
-            return (
-                pl.DataFrame({col: None for col in ("title", "url", "start", "end")})
-                .cast({
-                    "title": pl.String,
-                    "url": pl.String,
-                    "start": pl.Float64,
-                    "end": pl.Float64
-                })
+            return pl.DataFrame(
+                {col: None for col in ("title", "url", "start", "end")},
+                {"title": pl.String, "url": pl.String, "start": pl.Float64, "end": pl.Float64}
             )
         query_embeddings: np.ndarray = EMBEDDING_MODEL.encode(
             f"search_query: {query}",
@@ -335,9 +425,9 @@ def get_semantic_search_results(
                 .alias("cosine_similarity")
             )
             .filter(pl.col("cosine_similarity").gt(0))
-            .sort(by="cosine_similarity", descending=True)
+            .sort("cosine_similarity", descending=True)
             .drop("embedding", "cosine_similarity")
-            .limit(50)
+            .limit(100)
             .with_columns(
                 pl.concat_str(pl.col("title").str.to_lowercase(), "chunk", separator=": ")
                 .map_elements(
@@ -347,13 +437,9 @@ def get_semantic_search_results(
                 .alias("relevance_score")
             )
             .filter(pl.col("relevance_score").ge(threshold))
-            .sort(by="relevance_score", descending=True)
-            .select(
-                "title",
-                pl.concat_str(pl.lit("https://youtu.be/"), "video_id").alias("url"),
-                "start",
-                "end"
-            )
+            .sort("relevance_score", descending=True)
+            .with_columns(pl.concat_str(pl.lit("https://youtu.be/"), "video_id").alias("url"))
+            .select("title", "url", "start", "end")
             .limit(k)
             .collect()
         )

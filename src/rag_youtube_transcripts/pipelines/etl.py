@@ -8,7 +8,11 @@ from tqdm import tqdm
 
 from rag_youtube_transcripts.config import Config
 from rag_youtube_transcripts.logger import logger
-from rag_youtube_transcripts.utils import encode_transcripts, fetch_transcripts
+from rag_youtube_transcripts.utils import (
+    create_bm25_dataset,
+    encode_transcripts,
+    fetch_transcripts
+)
 
 
 @logger.catch
@@ -53,6 +57,9 @@ def main() -> None:
                 .sort("video_id", "chunk_index")
                 .sink_parquet(Config.Paths.embeddings)
             )
+
+            # update `./artifacts/data/bm25.parquet`
+            create_bm25_dataset()
             logger.info(
                 f"Finished! It took ~{((time.perf_counter() - start)/60):.2f} minutes to generate "
                 f"embeddings for {len(data):_} YouTube video transcripts."

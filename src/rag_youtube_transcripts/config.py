@@ -23,6 +23,7 @@ class Config:
             ./artifacts/data/transcripts.parquet.
             embeddings: (Path): YouTube video transcripts' embeddings data,
             ./artifacts/data/embeddings.parquet.
+            bm25_data (Path): BM25 metadata, ./artifacts/data/bm25_data.parquet.
         """
         home_dir: Path = Path(__file__).parent.parent.parent.resolve()
         artifacts_dir: Path = home_dir / "artifacts"
@@ -33,6 +34,7 @@ class Config:
         params: Path = home_dir / "params.yaml"
         transcripts: Path = data_dir / "transcripts.parquet"
         embeddings: Path = data_dir / "embeddings.parquet"
+        bm25_data: Path = data_dir / "bm25.parquet"
 
     @classmethod
     def make_dirs(cls) -> None:
