@@ -8,11 +8,7 @@ from tqdm import tqdm
 
 from rag_youtube_transcripts.config import Config
 from rag_youtube_transcripts.logger import logger
-from rag_youtube_transcripts.utils import (
-    create_bm25_dataset,
-    encode_transcripts,
-    fetch_transcripts
-)
+from rag_youtube_transcripts.utils import create_bm25_dataset, encode_transcripts, fetch_transcripts
 
 
 @logger.catch
