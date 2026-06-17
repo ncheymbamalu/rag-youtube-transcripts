@@ -35,7 +35,7 @@ def main() -> None:
             # update `./artifacts/data/transcripts.parquet`
             (
                 pl.concat((data.lazy(), pl.scan_parquet(Config.Paths.transcripts)), how="vertical")
-                .sort(by=["creation_date", "video_id"], descending=[True, False])
+                .sort("creation_date", "video_id", descending=[True, False])
                 .sink_parquet(Config.Paths.transcripts)
             )
 
@@ -58,7 +58,7 @@ def main() -> None:
             create_bm25_dataset()
             logger.info(
                 f"Finished! It took ~{((time.perf_counter() - start)/60):.2f} minutes to generate "
-                f"embeddings for {len(data):_} YouTube video transcripts."
+                f"embeddings for {data.height:_} YouTube video transcripts."
             )
     except Exception as e:
         raise e
