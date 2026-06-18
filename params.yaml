@@ -23,7 +23,7 @@ embedding_model: nomic-ai/modernbert-embed-base
 reranker_model: cross-encoder/ms-marco-MiniLM-L-12-v2
 llm:
   contextual_chunking: llama-3.1-8b-instant
-  rag: llama-3.3-70b-versatile
+  rag: qwen/qwen3.6-27b
 temperature:
   contextual_chunking: 0.0
   rag: 1.0
