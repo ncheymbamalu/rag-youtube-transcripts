@@ -83,6 +83,7 @@ def generate_response(
             ],
             temperature=temperature,
             max_completion_tokens=max_completion_tokens,
+            reasoning_effort="none"
         )
         message: ChatCompletionMessage = completion.choices[0].message
         return message.content
