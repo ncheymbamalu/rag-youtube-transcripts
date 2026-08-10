@@ -6,8 +6,9 @@ install: pyproject.toml
 	uv sync
 
 clean:
-	find . -type d -name "__pycache__" -exec rm -rf {} +
-	rm -rf .ruff_cache .pytest_cache
+	@echo "Cleaning up codebase ..."
+	@find . -type d -name "__pycache__" -exec rm -rf {} +
+	@rm -rf .ruff_cache .pytest_cache
 
 check: .venv
 	uv run ruff check src
