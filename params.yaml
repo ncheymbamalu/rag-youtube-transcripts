@@ -26,7 +26,7 @@ llm:
   rag: qwen/qwen3.6-27b
 temperature:
   contextual_chunking: 0.0
-  rag: 1.0
+  rag: 0.3
 max_output_tokens:
   contextual_chunking: 1024
   rag: 4096
