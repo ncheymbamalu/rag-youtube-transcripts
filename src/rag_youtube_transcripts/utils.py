@@ -14,6 +14,7 @@ from chonkie import TokenChunker
 from dotenv import load_dotenv
 from groq import Groq
 from groq.types.chat import ChatCompletion
+from groq.types.chat.chat_completion import Choice as ChatCompletionChoice
 from httpx import Client, Response
 from nltk.corpus import stopwords
 from sentence_transformers import CrossEncoder, SentenceTransformer
@@ -30,7 +31,9 @@ load_dotenv(Config.Paths.env)
 
 logging.set_verbosity_error()
 
-GROQ_CLIENT: Groq = Groq(api_key=os.getenv("GROQ_API_KEY", ""))
+GROQ_CLIENT: Groq = Groq(api_key=os.getenv("GROQ_API_KEY", ""), max_retries=5, timeout=30.0)
+SYSTEM_PROMPT: str = Config.load_params("contextual_chunking_system_prompt")
+USER_PROMPT: str = Config.load_params("contextual_chunking_user_prompt")
 EMBEDDING_MODEL: SentenceTransformer = SentenceTransformer(
     model_name_or_path=Config.load_params("embedding_model"),
     trust_remote_code=True
@@ -176,25 +179,30 @@ def add_context_to_chunk(
         str: Chunk that's prefixed with context.
     """
     try:
-        system_prompt: str = Config.load_params("contextual_chunking_system_prompt")
-        user_prompt: str = Config.load_params("contextual_chunking_user_prompt")
         completion: ChatCompletion = GROQ_CLIENT.chat.completions.create(
             model=llm,
             messages=[
                 {
                     "role": "system",
-                    "content": system_prompt
+                    "content": SYSTEM_PROMPT
                 },
                 {
                     "role": "user",
-                    "content": user_prompt.format(transcript=transcript, chunk=chunk)
+                    "content": USER_PROMPT.format(transcript=transcript, chunk=chunk)
                 }
             ],
             temperature=temperature,
             max_completion_tokens=max_output_tokens,
-            reasoning_effort="low"
+            reasoning_effort=Config.load_params("reasoning_effort").contextual_chunking
         )
-        context: str = completion.choices[0].message.content.strip().lower()
+        choice: ChatCompletionChoice = completion.choices[0]
+        if choice.finish_reason == "length" or not choice.message.content:
+            logger.warning(
+                f"Empty/truncated context (finish_reason={choice.finish_reason}). "
+                f"Using original chunk: {chunk[:80]}..."
+            )
+            return chunk
+        context: str = choice.message.content.strip().lower()
         return f"{context}\n{chunk}"
     except Exception as e:
         raise e

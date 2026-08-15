@@ -30,6 +30,9 @@ temperature:
 max_output_tokens:
   contextual_chunking: 1024
   rag: 4096
+reasoning_effort:
+  contextual_chunking: low
+  rag: none
 k: 3
 threshold: 0.9
 delimiter: ====================

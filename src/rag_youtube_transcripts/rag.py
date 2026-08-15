@@ -47,7 +47,8 @@ def generate_response(
     query: str,
     llm: str = Config.load_params("llm").rag,
     temperature: float | int = Config.load_params("temperature").rag,
-    max_completion_tokens: int = Config.load_params("max_output_tokens").rag
+    max_completion_tokens: int = Config.load_params("max_output_tokens").rag,
+    reasoning_effort: str = Config.load_params("reasoning_effort").rag
 ) -> str:
     """Generates a response to the input query.
 
@@ -60,6 +61,9 @@ def generate_response(
         the more repetitive the response. Defaults to Config.load_params("temperature").rag.
         max_completion_tokens (int, optional): Maximum number of tokens used to create
         the response. Defaults to Config.load_params("max_output_tokens").rag.
+        reasoning_effort (str, optional): Controls how many internal reasoning tokens the
+        llm generates before producing its response.
+        Defaults to Config.load_params("reasoning_effort").rag
 
     Returns:
         str: Response.
@@ -83,7 +87,7 @@ def generate_response(
             ],
             temperature=temperature,
             max_completion_tokens=max_completion_tokens,
-            reasoning_effort="none"
+            reasoning_effort=reasoning_effort
         )
         message: ChatCompletionMessage = completion.choices[0].message
         return message.content
