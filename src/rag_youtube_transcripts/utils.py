@@ -192,6 +192,7 @@ def add_context_to_chunk(
             ],
             temperature=temperature,
             max_completion_tokens=max_output_tokens,
+            reasoning_effort="low"
         )
         context: str = completion.choices[0].message.content.strip().lower()
         return f"{context}\n{chunk}"
