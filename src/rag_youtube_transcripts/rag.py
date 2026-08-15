@@ -26,7 +26,8 @@ def create_user_prompt(query: str) -> str:
             f"TITLE: {record.get('title')}\n"
             f"URL: {record.get('url')}\n"
             f"START: {record.get('start')}\n"
-            f"END: {record.get('end')}"
+            f"END: {record.get('end')}\n"
+            f"EXCERPT: {record.get('excerpt')}"
             for record in results.to_dicts()
         )
         user_prompt: str = f"""\

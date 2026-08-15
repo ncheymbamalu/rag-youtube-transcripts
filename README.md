@@ -50,7 +50,7 @@ Video is a terrible medium for retrieval. The knowledge is there, but it's locke
 | **Generation** | `qwen/qwen3.6-27b` via Groq |
 | **Serving** | FastAPI + Uvicorn, containerized |
 | **Storage** | Parquet artifacts, DVC-versioned on Google Drive |
-| **Citations** | Video title, URL, and fractional start/end marks in every grounded answer |
+| **Citations** | Transcript excerpt, video title, URL, and fractional start/end marks in every grounded answer |
 
 **Stack:** Python 3.11 · Polars · Chonkie · sentence-transformers · PyTorch · Groq · FastAPI · NLTK · DVC · uv · Docker
 
@@ -107,7 +107,7 @@ Retrieval is a four-stage cascade, deliberately ordered cheapest-to-most-expensi
 
 **Stage 3 — Cross-encoder reranking.** The 250 survivors are scored by a cross-encoder that reads the query and the chunk *jointly* — far more accurate than comparing independently-computed vectors, and far too slow to run on the full corpus. Sigmoid activation makes the output a calibrated 0–1 relevance probability, which is what makes the `threshold: 0.9` cutoff meaningful rather than arbitrary. Anything below the bar is dropped entirely.
 
-**Stage 4 — Top-k.** The `k` highest-scoring chunks (default 3) become the context.
+**Stage 4 — Top-k.** The `k` highest-scoring chunks (default 3) become the context. The chunk *text* is carried through to generation alongside the metadata — the excerpt is what the answer is grounded in, and the title/URL/timestamps are what make it checkable.
 
 Each surviving chunk carries `start` and `end` — the chunk's position expressed as a fraction of the video, derived from `chunk_index / chunk_count`. These become the "watch from here" marks in the final answer.
 
@@ -226,17 +226,21 @@ Both settings matter, for different reasons.
 
 ## Generation
 
-The final answer is produced by `qwen/qwen3.6-27b` on Groq. The system prompt encodes three behaviors:
+The final answer is produced by `qwen/qwen3.6-27b` on Groq. Each retrieved result is passed to the model as a block containing `TITLE`, `URL`, `START`, `END`, and `EXCERPT`, with multiple results joined by a configurable delimiter so sources stay distinguishable.
 
-**Grounded mode.** When retrieval returns usable context, the model must cite the `TITLE`, `URL`, `START`, and `END` of every video it draws on. Citations are mandatory, not encouraged.
+The `EXCERPT` is the **contextualized** chunk — the machine-written situating summary followed by the verbatim transcript text — the same string that was embedded at ingestion. Passing the summary along with the raw text gives the model framing the transcript alone doesn't carry; the tradeoff is that the summary is synthetic, so the system prompt explicitly warns against attributing it to the speaker. Watch for phrasing like *"the speaker explains that this section covers…"* — that's the tell that the prefix is being read as spoken content, and the fix is to strip it (`pl.col("chunk").str.split("\n").list.last()`, safe because raw transcripts are whitespace-normalized and contain no newlines).
 
-**Graceful degradation.** When context is empty, irrelevant, or insufficient, the model is instructed to answer from parametric knowledge *with sources*, explicitly told not to fabricate, and told to append a YouTube search URL for the original query. This matters more than it looks: an aggressive `threshold: 0.9` means empty retrieval is a normal outcome, not an error state, and the system stays useful instead of returning "I don't know."
+The system prompt encodes three behaviors:
+
+**Grounded mode.** When retrieval returns usable context, the `EXCERPT` text is the primary source. The model is instructed to synthesize rather than quote at length, to attribute each claim to the specific video it came from rather than merging claims under one citation, to surface disagreement between excerpts instead of silently picking one, and to state plainly what the excerpts do *not* cover rather than filling gaps from prior knowledge. Citing `TITLE`, `URL`, `START`, and `END` for every video drawn on is mandatory, not encouraged.
+
+Because the transcripts are automatically generated — lowercase, unpunctuated, and carrying speech-recognition errors — the prompt also tells the model to read them charitably rather than treating those artifacts as meaningful.
+
+**Graceful degradation.** When context is empty, irrelevant, or insufficient, the model is instructed to answer from parametric knowledge *with sources*, explicitly told not to fabricate, told to **state that the answer is not based on the retrieved videos**, and told to append a YouTube search URL for the original query. This matters more than it looks: an aggressive `threshold: 0.9` means empty retrieval is a normal outcome, not an error state, and the system stays useful instead of returning "I don't know." Labeling the mode matters now that grounded answers exist — without it, a reader can't tell a transcript-backed answer from a parametric one.
 
 **Readability.** Output is formatted for human consumption rather than dumped as raw context.
 
 Generation runs at `temperature: 0.3` rather than a conversational default. Citations must reproduce `URL`, `START`, and `END` verbatim, and YouTube video IDs are effectively random character sequences — there is no linguistic prior making the correct next character more probable, so every character sampled at high temperature is a chance to emit a link that 404s. A confidently wrong URL is worse than no citation at all. Lower temperature also reduces drift into the prompt's "insufficient context" escape hatch when the retrieved context was in fact adequate.
-
-Multiple retrieved chunks are joined with a configurable delimiter so the model can tell sources apart.
 
 Generation runs with `reasoning_effort: none`, valid for Qwen but **not** for the gpt-oss family — swapping this model requires changing that value to `low` or `medium`. See [Design Notes](#design-notes--known-limitations) on the preview-tier risk attached to this model choice.
 

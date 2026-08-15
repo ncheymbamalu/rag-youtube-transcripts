@@ -447,8 +447,13 @@ def get_semantic_search_results(
             )
             .filter(pl.col("relevance_score").ge(threshold))
             .sort("relevance_score", descending=True)
-            .with_columns(pl.concat_str(pl.lit("https://youtu.be/"), "video_id").alias("url"))
-            .select("title", "url", "start", "end")
+            .select(
+                "title",
+                pl.concat_str(pl.lit("https://youtu.be/"), "video_id").alias("url"),
+                "start",
+                "end",
+                pl.col("chunk").alias("excerpt")
+            )
             .limit(k)
             .collect()
         )
