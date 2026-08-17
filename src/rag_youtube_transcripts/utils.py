@@ -1,11 +1,11 @@
 """This module contains objects and functions that are used in other modules and scripts."""
 
-import json
 import os
 import re
 import string
 import textwrap
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import polars as pl
@@ -17,6 +17,8 @@ from groq.types.chat import ChatCompletion
 from groq.types.chat.chat_completion import Choice as ChatCompletionChoice
 from httpx import Client, Response
 from nltk.corpus import stopwords
+from omegaconf import DictConfig
+from polars.datatypes.classes import DataTypeClass
 from sentence_transformers import CrossEncoder, SentenceTransformer
 from spellchecker import SpellChecker
 from tqdm import tqdm
@@ -31,15 +33,14 @@ load_dotenv(Config.Paths.env)
 
 logging.set_verbosity_error()
 
+PARAMS: DictConfig = Config.load_params(Path(__file__).stem)
 GROQ_CLIENT: Groq = Groq(api_key=os.getenv("GROQ_API_KEY", ""), max_retries=5, timeout=30.0)
-SYSTEM_PROMPT: str = Config.load_params("contextual_chunking_system_prompt")
-USER_PROMPT: str = Config.load_params("contextual_chunking_user_prompt")
 EMBEDDING_MODEL: SentenceTransformer = SentenceTransformer(
-    model_name_or_path=Config.load_params("embedding_model"),
+    model_name_or_path=PARAMS.models.embedding,
     trust_remote_code=True
 )
 RERANKER_MODEL: CrossEncoder = CrossEncoder(
-    model_name_or_path=Config.load_params("reranker_model"),
+    model_name_or_path=PARAMS.models.reranking,
     activation_fn=torch.nn.Sigmoid()
 )
 KNOWLEDGE_BASE: pl.LazyFrame = (
@@ -52,8 +53,7 @@ KNOWLEDGE_BASE: pl.LazyFrame = (
     )
     .with_columns(
         ((pl.col("chunk_index") - 1) / pl.col("chunk_count")).round(2).alias("start"),
-        (pl.col("chunk_index") / pl.col("chunk_count")).round(2).alias("end"),
-        pl.col("embedding").str.json_decode(dtype=pl.List(pl.Float64))
+        (pl.col("chunk_index") / pl.col("chunk_count")).round(2).alias("end")
     )
     .select(
         "video_id",
@@ -72,7 +72,7 @@ SPELL_CHECKER: SpellChecker = SpellChecker(distance=1)
 @logger.catch
 def fetch_transcripts(
     youtube_channel_id: str,
-    max_results: int = Config.load_params("max_results"),
+    max_transcripts: int = PARAMS.max_transcripts,
 ) -> pl.DataFrame:
     """Fetches YouTube video transcripts and corresponding metadata from the YouTube
     Data GET endpoint and returns a pl.DataFrame.
@@ -81,20 +81,24 @@ def fetch_transcripts(
         youtube_channel_id (str): ID of the YouTube channel whose video transcripts
         will be fetched.
         max_results (int, optional): Maximum number of video transcripts to fetch.
-        Defaults to Config.load_params("max_results").
+        Defaults to PARAMS.max_transcripts.
 
     Returns:
         pl.DataFrame: YouTube video transcripts and corresponding metadata, that is,
         video ID, creation date, and title.
     """
     try:
-        video_ids: list[str] = pl.read_parquet(Config.Paths.transcripts)["video_id"].to_list()
+        video_ids: list[str] = (
+            pl.read_parquet(Config.Paths.transcripts)
+            .get_column("video_id")
+            .to_list()
+        )
         params: dict[str, int | list[str] | str] = {
             "key": os.getenv("YOUTUBE_DATA_API_KEY", ""),
             "channelId": youtube_channel_id,
             "part": ["snippet", "id"],
             "order": "date",
-            "maxResults": max_results
+            "maxResults": max_transcripts
         }
         schema: pl.Schema = pl.Schema({
             "video_id": pl.String,
@@ -103,7 +107,7 @@ def fetch_transcripts(
             "transcript": pl.String
         })
         with Client() as client:
-            response: Response = client.get(Config.load_params("youtube_data_api"), params=params)
+            response: Response = client.get(PARAMS.youtube_data_api, params=params)
             if response.status_code == 200:
                 records: list[dict[str, datetime | str]] = []
                 for item in response.json().get("items"):
@@ -158,9 +162,9 @@ def fetch_transcripts(
 def add_context_to_chunk(
     transcript: str,
     chunk: str,
-    llm: str = Config.load_params("llm").contextual_chunking,
-    temperature: float = Config.load_params("temperature").contextual_chunking,
-    max_output_tokens: int = Config.load_params("max_output_tokens").contextual_chunking,
+    llm: str = PARAMS.contextual_chunking.llm,
+    temperature: float = PARAMS.contextual_chunking.temperature,
+    max_output_tokens: int = PARAMS.contextual_chunking.max_output_tokens,
 ) -> str:
     """Adds context to a YouTube video transcript's chunk.
 
@@ -168,32 +172,35 @@ def add_context_to_chunk(
         transcript (str): YouTube video transcript.
         chunk (str): Subset of the YouTube video transcript.
         llm (str, optional): Model used to generate the chunk's context.
-        Defaults to Config.load_params("llm").contextual_chunking.
+        Defaults to PARAMS.contextual_chunking.llm.
         temperature (float, optional): Parameter between 0 and 2, inclusive, that contols the
         randomness of the llm's output. The lower the temperature, the more repeatable the
-        response. Defaults to Config.load_params("temperature").contextual_chunking.
+        response. Defaults to PARAMS.contextual_chunking.temperature.
         max_output_tokens (int, optional): Maximum number of tokens used to generate the llm's
-        output. Defaults to Config.load_params("max_output_tokens").contextual_chunking.
+        output. Defaults to PARAMS.contextual_chunking.max_output_tokens.
 
     Returns:
         str: Chunk that's prefixed with context.
     """
     try:
+        system_prompt: str = PARAMS.contextual_chunking.system_prompt
+        user_prompt: str = PARAMS.contextual_chunking.user_prompt
+        reasoning_effort: str = PARAMS.contextual_chunking.reasoning_effort
         completion: ChatCompletion = GROQ_CLIENT.chat.completions.create(
             model=llm,
             messages=[
                 {
                     "role": "system",
-                    "content": SYSTEM_PROMPT
+                    "content": system_prompt
                 },
                 {
                     "role": "user",
-                    "content": USER_PROMPT.format(transcript=transcript, chunk=chunk)
+                    "content": user_prompt.format(transcript=transcript, chunk=chunk)
                 }
             ],
             temperature=temperature,
             max_completion_tokens=max_output_tokens,
-            reasoning_effort=Config.load_params("reasoning_effort").contextual_chunking
+            reasoning_effort=reasoning_effort
         )
         choice: ChatCompletionChoice = completion.choices[0]
         if choice.finish_reason == "length" or not choice.message.content:
@@ -221,53 +228,50 @@ def encode_transcripts(data: pl.DataFrame) -> pl.DataFrame:
     """
     try:
         tokenizer: PreTrainedTokenizerFast = EMBEDDING_MODEL.tokenizer
-        max_input_tokens: int = Config.load_params("max_input_tokens")
-        chunk_size: int = Config.load_params("chunk_size")
+        max_transcript_tokens: int = PARAMS.encoding.max_transcript_tokens
+        chunk_size: int = PARAMS.encoding.chunk_size
         chunker: TokenChunker = TokenChunker(
             tokenizer=tokenizer,
             chunk_size=chunk_size,
             chunk_overlap=(chunk_size // 10)
         )
         dfs: list[pl.DataFrame] = []
-        for idx, transcript in enumerate(tqdm(
-            iterable=data["transcript"],
+        for video_id, transcript in enumerate(tqdm(
+            iterable=zip(data.get_column("video_id"), data.get_column("transcript"), strict=True),
+            desc="Splitting transcripts into contextual chunks and generating embeddings for each",
+            total=data.height,
             unit="transcript",
-            desc="Splitting transcripts into contextual chunks and generating embeddings for each"
+            
         )):
             tokens: list[str] = tokenizer.tokenize(transcript)
-            if len(tokens) > max_input_tokens:
-                tokens = tokens[:max_input_tokens]
+            if len(tokens) > max_transcript_tokens:
+                tokens = tokens[:max_transcript_tokens]
                 token_ids: list[int] = tokenizer.convert_tokens_to_ids(tokens)
                 transcript = tokenizer.decode(token_ids).strip()
             chunks: list[str] = [
                 add_context_to_chunk(transcript, chunk.text.strip())
                 for chunk in chunker(transcript)
             ]
-            embeddings: list[str] = [
-                json.dumps(
-                    EMBEDDING_MODEL
-                    .encode(f"search_document: {chunk}", normalize_embeddings=True)
-                    .tolist()
-                )
-                for chunk in chunks
-            ]
-            video_ids: list[str] = [data[idx, "video_id"]] * len(chunks)
-            records: list[dict[str, int | str]] = [
-                {
-                    "video_id": video_id,
-                    "chunk_index": idx + 1,
-                    "chunk": chunk,
-                    "embedding": embedding
-                }
-                for idx, (video_id, chunk, embedding)
-                in enumerate(zip(video_ids, chunks, embeddings, strict=True))
-            ]
-            dfs.append(pl.DataFrame(records))
-        data = (
-            pl.concat(dfs, how="vertical")
-            .cast({"chunk_index": pl.Int16})
-            .sort(by=["video_id", "chunk_index"])
-        )
+            if not chunks:
+                logger.warning(f"No chunks produced for <green>{video_id}</>. Skipping.")
+                continue
+            embedding_dim: int = EMBEDDING_MODEL.get_sentence_embedding_dimension()
+            embeddings: np.ndarray = EMBEDDING_MODEL.encode(  # (len(chunks), embedding_dim)
+                [f"search_document: {chunk}" for chunk in chunks],
+                normalize_embeddings=True,
+                batch_size=32,
+                show_progress_bar=False
+            )
+            video_ids: list[str] = [video_id] * len(chunks)
+            chunk_indices: range = range(1, len(chunks) + 1)
+            records: pl.DataFrame = pl.DataFrame({
+                "video_id": video_ids,
+                "chunk_index": pl.Series(values=chunk_indices, dtype=pl.Int16),
+                "chunk": chunks,
+                "embedding": pl.Series(values=embeddings, dtype=pl.Array(pl.Float32, embedding_dim))
+            })
+            dfs.append(records)
+        data = pl.concat(dfs, how="vertical").sort("video_id", "chunk_index")
         return data
     except Exception as e:
         raise e
@@ -383,8 +387,8 @@ def preprocess_query(query: str) -> str:
 
 def get_semantic_search_results(
     query: str,
-    k: int = Config.load_params("k"),
-    threshold: float = Config.load_params("threshold"),
+    k: int = PARAMS.semantic_search.k,
+    threshold: float = PARAMS.semantic_search.relevance_threshold,
 ) -> pl.DataFrame:
     """Returns a pl.DataFrame that contains the title and URL of the top k
     YouTube videos whose chunk has the highest degree of semantic similarity
@@ -392,59 +396,76 @@ def get_semantic_search_results(
 
     Args:
         query (str): Input query
-        k (int, optional): Number of results to return. Defaults to Config.load_params("k").
+        k (int, optional): Number of results to return. Defaults to PARAMS.semantic_search.k.
         threshold (float, optional): Threshold probability used to filter out less
-        relevant results. Defaults to Config.load_params("threshold").
+        relevant results. Defaults to PARAMS.semantic_search.relevance_threshold.
 
     Returns:
-        pl.DataFrame: Title and URL of the top k YouTube videos whose chunk has the
-        strongest contextual relationship with the input query. 
+        pl.DataFrame: Title, URL, start, and end marks of the top k YouTube videos
+        whose chunk has the strongest contextual relationship with the input query. 
     """
     try:
-        query = preprocess_query(query) 
-        knowledge_base: pl.LazyFrame = (
+        # pre-process the input query
+        query = preprocess_query(query)
+
+        # create the empty result
+        schema: dict[str, DataTypeClass] = {
+            "title": pl.String,
+            "url": pl.String,
+            "start": pl.Float64,
+            "end": pl.Float64,
+            "excerpt": pl.String
+        }
+        empty_result: pl.DataFrame = pl.DataFrame(schema=schema)
+
+        # BM25
+        candidates: pl.DataFrame = (
             pl.scan_parquet(Config.Paths.bm25_data)
             .filter(pl.col("token").is_in(query.split()))
             .group_by("video_id", "chunk_index")
-            .agg(pl.col("score").sum())
-            .sort("score", descending=True)
+            .agg(pl.sum("score"))
             .join(
                 KNOWLEDGE_BASE,
-                how="left",
+                how="inner",
                 on=["video_id", "chunk_index"],
                 maintain_order="left"
             )
             .drop("chunk_index", "score")
+            .collect()
         )
-        if knowledge_base.limit(1).collect().is_empty():
-            return pl.DataFrame(
-                {col: None for col in ("title", "url", "start", "end")},
-                {"title": pl.String, "url": pl.String, "start": pl.Float64, "end": pl.Float64}
-            )
-        query_embeddings: np.ndarray = EMBEDDING_MODEL.encode(
+        if candidates.is_empty():
+            return empty_result
+
+        # cosine similarity
+        query_embedding: np.ndarray = EMBEDDING_MODEL.encode(
             f"search_query: {query}",
             normalize_embeddings=True
         )
-        return (
-            knowledge_base
-            .with_columns(
-                pl.col("embedding")
-                .list.eval(pl.element().dot(query_embeddings))
-                .list.item()
-                .alias("cosine_similarity")
-            )
+        cos_sims: np.ndarray = candidates.get_column("embedding").to_numpy().dot(query_embedding)
+        candidates = (
+            candidates
+            .with_columns(pl.Series("cosine_similarity", cos_sims, dtype=pl.Float32))
             .filter(pl.col("cosine_similarity").gt(0))
             .sort("cosine_similarity", descending=True)
             .drop("embedding", "cosine_similarity")
-            .limit(250)
+            .head(250)
             .with_columns(
                 pl.concat_str(pl.col("title").str.to_lowercase(), "chunk", separator=": ")
-                .map_elements(
-                    lambda chunk: RERANKER_MODEL.predict((query, chunk)),
-                    return_dtype=pl.Float64
-                )
-                .alias("relevance_score")
+                .alias("titled_chunk")
             )
+        )
+        if candidates.is_empty():
+            return empty_result
+
+        # cross-encoder re-ranking
+        rel_scores: np.ndarray = RERANKER_MODEL.predict(
+            [(query, chunk) for chunk in candidates.get_column("titled_chunk")],
+            batch_size=32,
+            show_progress_bar=False,
+        )
+        candidates = (
+            candidates
+            .with_columns(pl.Series("relevance_score", rel_scores, dtype=pl.Float32))
             .filter(pl.col("relevance_score").ge(threshold))
             .sort("relevance_score", descending=True)
             .select(
@@ -455,8 +476,8 @@ def get_semantic_search_results(
                 pl.col("chunk").alias("excerpt")
             )
             .limit(k)
-            .collect()
         )
+        return candidates
     except Exception as e:
         raise e
 

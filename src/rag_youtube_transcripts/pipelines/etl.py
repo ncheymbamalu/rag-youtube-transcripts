@@ -1,14 +1,19 @@
 """This script executes the YouTube video transcripts ETL pipeline."""
 
 import time
+from pathlib import Path
 
 import polars as pl
 from joblib import Parallel, delayed
+from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
 
 from rag_youtube_transcripts.config import Config
 from rag_youtube_transcripts.logger import logger
 from rag_youtube_transcripts.utils import create_bm25_dataset, encode_transcripts, fetch_transcripts
+
+
+PARAMS: DictConfig = Config.load_params(Path(__file__).stem)
 
 
 @logger.catch
@@ -20,12 +25,14 @@ def main() -> None:
     """
     try:
         # fetch the YouTube video transcripts
+        youtube_channel_ids: list[str] = OmegaConf.to_container(PARAMS.youtube_channel_ids)
         dfs: list[pl.DataFrame] = Parallel(n_jobs=-1)(
             delayed(fetch_transcripts)(youtube_channel_id)
             for youtube_channel_id in tqdm(
-                iterable=Config.load_params("youtube_channel_ids"),
-                unit="YouTube Channel ID",
-                desc="Fetching YouTube video transcripts"
+                iterable=youtube_channel_ids,
+                desc="Fetching YouTube video transcripts",
+                total=len(youtube_channel_ids),
+                unit="YouTube Channel ID"
             )
         )
         data: pl.DataFrame = pl.concat(dfs, how="vertical")

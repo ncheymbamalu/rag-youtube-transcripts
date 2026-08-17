@@ -40,28 +40,29 @@ class Config:
     def make_dirs(cls) -> None:
         """Creates the project's main directories if they do not exist."""
         try:
-            directories: list[Path] = [
+            dirs: list[Path] = [
                 cls.Paths.artifacts_dir,
                 cls.Paths.data_dir,
                 cls.Paths.models_dir,
             ]
-            for directory in directories:
-                directory.mkdir(parents=True, exist_ok=True)
+            for _dir in dirs:
+                _dir.mkdir(parents=True, exist_ok=True)
         except Exception as e:
             raise e
 
     @classmethod
-    def load_params(cls, key: str) -> DictConfig:
-        """Loads cls.Paths.params as a DictConfig object.
+    def load_params(cls, module: str) -> DictConfig:
+        """Loads module-specific parameters from `./params.yaml`.
 
         Args:
-            key (str): Unique identifier that's used to retrieve specific user-defined
-            key-value pairs.
+            module (str): Name of a user-defined module.
 
         Returns:
-            DictConfig: Dictionary-like object with user-defined key-value pairs.
+            DictConfig: Module-specific parameters in the form of user-defined
+            key-value pairs.
         """
         try:
-            return OmegaConf.load(cls.Paths.params).get(key)
+            params: DictConfig = OmegaConf.load(cls.Paths.params)
+            return params.get(module)
         except Exception as e:
             raise e

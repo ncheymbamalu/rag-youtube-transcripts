@@ -25,6 +25,7 @@ The system combines **contextual chunking**, a **precomputed BM25 index**, **den
   - [Embedding Generation](#embedding-generation)
   - [BM25 Index Construction](#bm25-index-construction)
   - [Groq Client Configuration](#groq-client-configuration)
+  - [Scheduling](#scheduling)
 - [Generation](#generation)
 - [API Reference](#api-reference)
 - [Project Structure](#project-structure)
@@ -60,7 +61,7 @@ Video is a terrible medium for retrieval. The knowledge is there, but it's locke
 
 ```mermaid
 flowchart TB
-    subgraph etl["ETL Pipeline · make etl"]
+    subgraph etl["ETL Pipeline · nightly cron"]
         Y["YouTube Data API v3<br/>(search by channel)"] --> T["youtube-transcript-api<br/>fetch + clean transcripts"]
         T --> C["TokenChunker<br/>512 tokens / 10% overlap"]
         C --> CC["Contextual chunking<br/>openai/gpt-oss-20b<br/>(prefix-cached)"]
@@ -101,11 +102,19 @@ Retrieval is a four-stage cascade, deliberately ordered cheapest-to-most-expensi
 
 **Stage 0 — Query preprocessing.** Punctuation is stripped, whitespace collapsed, and each token spell-corrected with `pyspellchecker` (edit distance 1). This protects the lexical stage from typos, which BM25 has no tolerance for.
 
-**Stage 1 — BM25 lexical filter.** `bm25.parquet` holds a precomputed score for every `(video_id, chunk_index, token)` triple. Query tokens are matched against it, per-chunk scores are summed, and the result is sorted descending. Because scoring happened offline, this is a scan-and-aggregate — no term statistics computed at request time. If nothing matches, an empty frame is returned and the LLM falls back gracefully (see [Generation](#generation)).
+**Stage 1 — BM25 lexical filter.** `bm25.parquet` holds a precomputed score for every `(video_id, chunk_index, token)` triple. Query tokens are matched against it and per-chunk scores are summed. Because scoring happened offline, this is a scan-and-aggregate — no term statistics computed at request time. If nothing matches, an empty frame is returned and the LLM falls back gracefully (see [Generation](#generation)).
 
-**Stage 2 — Dense similarity.** Surviving chunks are joined to the embeddings knowledge base. The query is encoded with the `search_query: ` prefix and L2-normalized, so cosine similarity reduces to a dot product. Chunks with positive similarity are sorted and truncated to the **top 250**.
+Worth being precise about what this stage contributes today: **membership, not ranking.** The summed BM25 score is not used to order or truncate anything — every chunk containing at least one query token passes through, and the dense stage re-sorts them all before any cut is made. So the TF-IDF weighting and length normalization computed in `create_bm25_dataset` currently function as a set-membership test. Reciprocal Rank Fusion is what turns that discarded signal into a second ranking (see [Design Notes](#design-notes--known-limitations)).
 
-**Stage 3 — Cross-encoder reranking.** The 250 survivors are scored by a cross-encoder that reads the query and the chunk *jointly* — far more accurate than comparing independently-computed vectors, and far too slow to run on the full corpus. Sigmoid activation makes the output a calibrated 0–1 relevance probability, which is what makes the `threshold: 0.9` cutoff meaningful rather than arbitrary. Anything below the bar is dropped entirely.
+**Stage 2 — Dense similarity.** Surviving chunks are joined to the embeddings knowledge base. The query is encoded with the `search_query: ` prefix and L2-normalized; document embeddings were normalized at ingestion, so cosine similarity reduces to a plain dot product. Embeddings are stored as `Array(Float32, 768)`, which means the candidate column comes out of `to_numpy()` as a contiguous `(n, 768)` matrix and the whole stage is one BLAS call rather than a per-row expression. Chunks with positive similarity are sorted and truncated to the **top 250**.
+
+**Stage 3 — Cross-encoder reranking.** The 250 survivors are scored by a cross-encoder that reads the query and the chunk *jointly* — far more accurate than comparing independently-computed vectors, and far too slow to run on the full corpus. Sigmoid activation makes the output a calibrated 0–1 relevance probability, which is what makes the `relevance_threshold: 0.9` cutoff meaningful rather than arbitrary. Anything below the bar is dropped entirely.
+
+Candidates are materialized first, then the whole list of `(query, text)` pairs goes to `CrossEncoder.predict` in a single call at an explicit `batch_size`. A per-row UDF would invoke the model once per candidate — 250 forward passes at batch size 1, paying tokenizer and tensor-allocation overhead every time — and was by a wide margin the most expensive thing in the request path.
+
+This mirrors the dense stage exactly: materialize the candidate set, run one vectorized operation over it, attach the result as a Series. Both scoring stages read the same way, the batch size is a tuned value rather than whatever the query engine happened to choose, and the string the cross-encoder actually saw exists as a real column instead of inside a lambda — which matters the first time a ranking looks wrong and you need to inspect the input.
+
+**The pair text is ordered deliberately.** `concat_str` builds `"{title}: {chunk}"`, and the chunk itself leads with its context prefix, so the cross-encoder reads title → context → transcript. The reranker's `max_length` is 512 tokens and a contextualized chunk exceeds that, so the tail of every chunk is truncated before scoring. Leading with the title and context means the material that *is* guaranteed to fit is the highest-signal part; reversing the order would push the summary out of the window and leave the model scoring raw speech with no framing. Do not reorder these fields.
 
 **Stage 4 — Top-k.** The `k` highest-scoring chunks (default 3) become the context. The chunk *text* is carried through to generation alongside the metadata — the excerpt is what the answer is grounded in, and the title/URL/timestamps are what make it checkable.
 
@@ -115,9 +124,9 @@ Each surviving chunk carries `start` and `end` — the chunk's position expresse
 
 ## Ingestion: The ETL Pipeline
 
-`src/rag_youtube_transcripts/pipelines/etl.py` — run with `make etl`.
+`src/rag_youtube_transcripts/pipelines/etl.py` — run nightly by cron, or on demand with `make etl`.
 
-Channel IDs are processed **in parallel** via `joblib` (`n_jobs=-1`). For each channel, the YouTube Data API's `search` endpoint returns up to `max_results` videos ordered by publish date. Videos already present in `transcripts.parquet` are skipped, as are videos with no available transcript — so repeat runs are incremental and the corpus grows over time rather than being rebuilt.
+Channel IDs are processed **in parallel** via `joblib` (`n_jobs=-1`). For each channel, the YouTube Data API's `search` endpoint returns up to `utils.max_transcripts` videos ordered by publish date. Videos already present in `transcripts.parquet` are skipped, as are videos with no available transcript — so repeat runs are incremental and the corpus grows over time rather than being rebuilt.
 
 Fetched transcripts are lowercased, whitespace-normalized, and HTML entities (`&#39;`, `&quot;`, `&amp;`) are decoded. If no new videos are found, the entire embedding stage is skipped.
 
@@ -133,13 +142,13 @@ Implementation details:
 
 - `chonkie`'s `TokenChunker` splits on the embedding model's own tokenizer, so chunk boundaries respect the model's actual token budget rather than an approximation.
 - Chunk size 512 with 10% overlap (51 tokens), so information straddling a boundary appears in both chunks.
-- Transcripts longer than `max_input_tokens` (102,400) are truncated before contextualization to stay inside the 131K context window.
+- Transcripts longer than `utils.encoding.max_transcript_tokens` (102,400) are truncated before contextualization to stay inside the 131K context window.
 - Context is generated by `openai/gpt-oss-20b` at `temperature: 0.0` with `reasoning_effort: low`, all three read from `params.yaml`.
 - Prompts are loaded once at module import rather than per call, so a full ETL run doesn't re-parse `params.yaml` tens of thousands of times.
 
 #### Why the prompt is ordered the way it is
 
-`contextual_chunking_user_prompt` places `{transcript}` **before** `{chunk}`. This is load-bearing, not stylistic.
+`utils.contextual_chunking.user_prompt` places `{transcript}` **before** `{chunk}`. This is load-bearing, not stylistic.
 
 ```
 Here is the document:
@@ -168,7 +177,7 @@ Reasoning models emit internal deliberation tokens before their visible answer. 
 | `openai/gpt-oss-*` | `low`, `medium`, `high` |
 | `qwen/qwen3.6-27b` | `none`, `default` |
 
-Writing a 2–4 sentence situating description is comprehension, not multi-step reasoning, so contextual chunking runs at `low`. Left at the model default, reasoning tokens can consume the entire 1024-token output budget and the context comes back truncated or empty.
+Writing a 2–4 sentence situating description is comprehension, not multi-step reasoning, so contextual chunking runs at `low`. Left at the model default, reasoning tokens can consume the entire `utils.contextual_chunking.max_output_tokens` budget (1024) and the context comes back truncated or empty.
 
 That failure mode is guarded rather than trusted. `add_context_to_chunk` inspects `finish_reason` and `message.content` — which the Groq SDK types as `Optional[str]` — and on a truncated or empty response logs a warning with a chunk preview and returns the **bare chunk**:
 
@@ -222,6 +231,34 @@ Both settings matter, for different reasons.
 
 **Timeouts** exist because the same client serves `/search`. Without one, a hung upstream request occupies a worker indefinitely with no error and no recovery.
 
+### Scheduling
+
+`bin/etl_pipeline.sh` wraps the pipeline for unattended execution and runs nightly via cron:
+
+```cron
+0 0 * * * /bin/bash /path/to/rag-youtube-transcripts/bin/etl_pipeline.sh
+```
+
+The wrapper exists because **cron is not an interactive shell**. It starts with a near-empty environment and a minimal `PATH`, so anything that works in a terminal by virtue of ambient state fails silently at midnight. The script compensates deliberately:
+
+- **Paths are resolved from the script's own location** (`BASH_SOURCE`), not from the working directory, so the job is correct regardless of where cron invokes it.
+- **Interpreters are addressed absolutely** — `.venv/bin/python` and `.venv/bin/dvc` rather than whatever `PATH` happens to resolve. `GIT` and `MAKE` come from `.env` for the same reason.
+- **`.env` is sourced with `set -a`**, exporting `GROQ_API_KEY` and `YOUTUBE_DATA_API_KEY` into the child process. Cron inherits none of a login shell's environment.
+- **Existence of `.env` is checked before anything else**, so a missing config fails loudly and immediately rather than midway through an API call.
+
+After the run, `dvc status --quiet` gates the commit: artifacts are added, committed, and pushed to both the DVC remote and Git only when something actually changed. Unchanged nights produce no commit churn.
+
+Each run writes to `logs/cron_<timestamp>.log`. Since nobody is watching at midnight, that file is the only record a run happened at all — worth checking after any change to the script, the schedule, or `.env`.
+
+`logs/` holds two families of file written by two different processes, and each is pruned by whoever creates it:
+
+| File | Written by | Retention |
+|---|---|---|
+| `file_<timestamp>.log` | Loguru's file sink | `retention="2 days"` in `logger.py` |
+| `cron_<timestamp>.log` | Shell redirection in the wrapper | `find … -delete` in the wrapper |
+
+The split is not redundancy. Loguru's retention globs a pattern derived from its own sink template — `file_*.log` — so it never sees the cron logs and could not prune them even in principle. The wrapper prunes its own before each run rather than after, so cleanup still happens on a night the pipeline fails.
+
 ---
 
 ## Generation
@@ -230,15 +267,15 @@ The final answer is produced by `qwen/qwen3.6-27b` on Groq. Each retrieved resul
 
 The `EXCERPT` is the **contextualized** chunk — the machine-written situating summary followed by the verbatim transcript text — the same string that was embedded at ingestion. Passing the summary along with the raw text gives the model framing the transcript alone doesn't carry; the tradeoff is that the summary is synthetic, so the system prompt explicitly warns against attributing it to the speaker. Watch for phrasing like *"the speaker explains that this section covers…"* — that's the tell that the prefix is being read as spoken content, and the fix is to strip it (`pl.col("chunk").str.split("\n").list.last()`, safe because raw transcripts are whitespace-normalized and contain no newlines).
 
-The system prompt encodes three behaviors:
+Both halves of the exchange are configured: `rag.system_prompt` sets the rules, `rag.user_prompt` is the `{context}` / `{query}` envelope that `create_user_prompt` fills with the assembled entries. Neither lives in code, so the prompt can be tuned without touching `rag.py`.
+
+The system prompt encodes two behaviors:
 
 **Grounded mode.** When retrieval returns usable context, the `EXCERPT` text is the primary source. The model is instructed to synthesize rather than quote at length, to attribute each claim to the specific video it came from rather than merging claims under one citation, to surface disagreement between excerpts instead of silently picking one, and to state plainly what the excerpts do *not* cover rather than filling gaps from prior knowledge. Citing `TITLE`, `URL`, `START`, and `END` for every video drawn on is mandatory, not encouraged.
 
 Because the transcripts are automatically generated — lowercase, unpunctuated, and carrying speech-recognition errors — the prompt also tells the model to read them charitably rather than treating those artifacts as meaningful.
 
-**Graceful degradation.** When context is empty, irrelevant, or insufficient, the model is instructed to answer from parametric knowledge *with sources*, explicitly told not to fabricate, told to **state that the answer is not based on the retrieved videos**, and told to append a YouTube search URL for the original query. This matters more than it looks: an aggressive `threshold: 0.9` means empty retrieval is a normal outcome, not an error state, and the system stays useful instead of returning "I don't know." Labeling the mode matters now that grounded answers exist — without it, a reader can't tell a transcript-backed answer from a parametric one.
-
-**Readability.** Output is formatted for human consumption rather than dumped as raw context.
+**Graceful degradation.** When context is empty, irrelevant, or insufficient, the model is instructed to answer from parametric knowledge *with sources*, explicitly told not to fabricate, told to **state that the answer is not based on the retrieved videos**, and told to append a YouTube search URL for the original query. This matters more than it looks: an aggressive `relevance_threshold: 0.9` means empty retrieval is a normal outcome, not an error state, and the system stays useful instead of returning "I don't know." Labeling the mode matters now that grounded answers exist — without it, a reader can't tell a transcript-backed answer from a parametric one.
 
 Generation runs at `temperature: 0.3` rather than a conversational default. Citations must reproduce `URL`, `START`, and `END` verbatim, and YouTube video IDs are effectively random character sequences — there is no linguistic prior making the correct next character more probable, so every character sampled at high temperature is a chance to emit a link that 404s. A confidently wrong URL is worse than no citation at all. Lower temperature also reduces drift into the prompt's "insufficient context" escape hatch when the retrieved context was in fact adequate.
 
@@ -251,7 +288,7 @@ Generation runs with `reasoning_effort: none`, valid for Qwen but **not** for th
 | `content` is `None` or empty | return bare chunk | return a fallback message |
 | `finish_reason == "length"` | return bare chunk | **return the content**, log a warning |
 
-A clipped answer is still useful and the reader can see it stopped mid-sentence, so it is served rather than thrown away. The truncation warning is a tuning signal: if it fires regularly, `max_output_tokens.rag` is too low for answers citing three videos with formatting. Guarding the empty case also prevents a `None` from reaching the endpoint's `response_model=dict[str, str]`, which would surface as an opaque `500` rather than a usable error.
+A clipped answer is still useful and the reader can see it stopped mid-sentence, so it is served rather than thrown away. The truncation warning is a tuning signal: if it fires regularly, `rag.max_output_tokens` is too low for answers citing three videos with formatting. Guarding the empty case also prevents a `None` from reaching the endpoint's `response_model=dict[str, str]`, which would surface as an opaque `500` rather than a usable error.
 
 ---
 
@@ -303,15 +340,17 @@ Interactive docs are served at `/docs` (`http://localhost:8080/docs` in Docker, 
 │   │   └── endpoint.py        # /healthz, /search
 │   └── pipelines/
 │       └── etl.py             # parallel fetch → chunk → embed → index
-├── artifacts.dvc              # DVC pointer to artifacts/ (~405 MB, 3 files)
-├── params.yaml                # channels, models, prompts, thresholds
+├── bin/
+│   └── etl_pipeline.sh        # cron wrapper: env, absolute paths, DVC/Git sync
+├── artifacts.dvc              # DVC pointer to artifacts/ (3 parquet files)
+├── params.yaml                # utils / rag / etl config blocks, prompts included
 ├── Dockerfile                 # multi-stage uv build, inference-only
 ├── docker-compose.yaml        # backend service, 8080:8000
 ├── Makefile
 └── pyproject.toml
 ```
 
-Note the `.dockerignore`: it whitelists the package but **excludes `pipelines/`**, so the shipped image contains only what's needed to serve. `docker-compose` bind-mounts `artifacts/` and the NLTK data rather than baking 405 MB into the layer.
+Note the `.dockerignore`: it whitelists the package but **excludes `pipelines/`**, so the shipped image contains only what's needed to serve. `docker-compose` bind-mounts `artifacts/` and the NLTK data rather than baking the corpus into the layer.
 
 ---
 
@@ -342,7 +381,13 @@ Create a `.env` in the project root:
 ```dotenv
 GROQ_API_KEY=gsk_...
 YOUTUBE_DATA_API_KEY=AIza...
+
+# absolute binary paths — required by bin/etl_pipeline.sh, since cron's PATH is minimal
+GIT=/usr/bin/git
+MAKE=/usr/bin/make
 ```
+
+The API keys are read by the application; `GIT` and `MAKE` exist only for the cron wrapper. Resolve them with `which git` and `which make` on the host that runs the schedule — a value that works on your laptop will not necessarily be right on a server.
 
 ### Artifacts
 
@@ -375,10 +420,22 @@ make stop_container
 
 ### Refresh the corpus
 
+This happens automatically every night. To trigger it by hand:
+
 ```bash
 make etl               # dvc pull → fetch → chunk → embed → index
 make update_artifacts  # dvc add → git commit → dvc push → git push
 ```
+
+To install or verify the schedule:
+
+```bash
+crontab -e             # 0 0 * * * /bin/bash /abs/path/to/bin/etl_pipeline.sh
+crontab -l             # confirm the entry has five time fields before the command
+ls -t logs/cron_*.log | head -1   # most recent unattended run
+```
+
+The wrapper does what `make etl` and `make update_artifacts` do together, plus the environment setup cron requires. Running it directly (`bash bin/etl_pipeline.sh`) is the fastest way to check that the scheduled path works before trusting it overnight.
 
 ### Development
 
@@ -404,59 +461,66 @@ print(wrap_text(generate_response("what is a mixture of experts")))
 
 ## Configuration Reference
 
-Everything lives in `params.yaml`.
+Everything lives in `params.yaml`, organized into three top-level blocks named for the module that consumes them — `utils`, `rag`, and `etl`. Each module loads exactly one block via `Config.load_params("<module>")`, so ownership of every setting is obvious from its path and no module can quietly reach into another's configuration.
 
-### Corpus
+### `utils` — ingestion, encoding, and retrieval
 
 | Key | Default | Description |
 |---|---|---|
 | `youtube_data_api` | Search endpoint URL | YouTube Data API v3 search |
-| `youtube_channel_ids` | 16 IDs | Channels to ingest |
-| `max_results` | `50` | Max videos per channel per run |
+| `max_transcripts` | `50` | Max videos fetched per channel per run |
+| `models.embedding` | `nomic-ai/modernbert-embed-base` | Bi-encoder |
+| `models.reranking` | `cross-encoder/ms-marco-MiniLM-L-12-v2` | Cross-encoder |
+| `encoding.chunk_size` | `512` | Tokens per chunk (overlap is `chunk_size // 10`) |
+| `encoding.max_transcript_tokens` | `102_400` | Transcript truncation limit before contextualization |
+| `semantic_search.k` | `3` | Chunks passed to the generator |
+| `semantic_search.relevance_threshold` | `0.9` | Minimum cross-encoder relevance probability |
 
-### Chunking & Embedding
-
-| Key | Default | Description |
-|---|---|---|
-| `chunk_size` | `512` | Tokens per chunk (overlap is `chunk_size // 10`) |
-| `max_input_tokens` | `102_400` | Transcript truncation limit for contextualization |
-| `embedding_model` | `nomic-ai/modernbert-embed-base` | Bi-encoder |
-| `reranker_model` | `cross-encoder/ms-marco-MiniLM-L-12-v2` | Cross-encoder |
-
-### Models
+**`utils.contextual_chunking`**
 
 | Key | Default | Description |
 |---|---|---|
-| `llm.contextual_chunking` | `openai/gpt-oss-20b` | Context generation — production tier, ~1000 T/s, prefix caching |
-| `llm.rag` | `qwen/qwen3.6-27b` | Answer generation (**preview tier** — see limitations) |
-| `temperature.contextual_chunking` | `0.0` | Deterministic context |
-| `temperature.rag` | `0.3` | Low, for verbatim citation fidelity |
-| `reasoning_effort.contextual_chunking` | `low` | gpt-oss accepts `low`/`medium`/`high` only |
-| `reasoning_effort.rag` | `none` | Qwen accepts `none`/`default` only |
-| `max_output_tokens.contextual_chunking` | `1024` | |
-| `max_output_tokens.rag` | `4096` | |
+| `llm` | `openai/gpt-oss-20b` | Production tier, ~1000 T/s, prefix caching |
+| `temperature` | `0.0` | Deterministic context |
+| `max_output_tokens` | `1024` | Budget shared with reasoning tokens |
+| `reasoning_effort` | `low` | gpt-oss accepts `low`/`medium`/`high` only |
+| `system_prompt` | — | Role framing for the context writer |
+| `user_prompt` | — | `{transcript}` / `{chunk}` template — **transcript first, for prefix caching** |
 
-### Retrieval
+### `rag` — answer generation
 
 | Key | Default | Description |
 |---|---|---|
-| `k` | `3` | Chunks passed to the LLM |
-| `threshold` | `0.9` | Minimum cross-encoder relevance probability |
+| `llm` | `qwen/qwen3.6-27b` | **Preview tier** — see limitations |
+| `temperature` | `0.3` | Low, for verbatim citation fidelity |
+| `max_output_tokens` | `4096` | Truncation past this is logged, not discarded |
+| `reasoning_effort` | `none` | Qwen accepts `none`/`default` only |
+| `system_prompt` | — | `{delimiter}` / `{youtube_search_url}` / `{query}` template |
+| `user_prompt` | — | `{context}` / `{query}` template wrapping the assembled entries |
 | `delimiter` | `====================` | Separator between context blocks |
 | `youtube_search_url` | Search URL | Fallback link when retrieval is empty |
 
-Prompts (`rag_system_prompt`, `contextual_chunking_system_prompt`, `contextual_chunking_user_prompt`) are also stored here — prompt changes are config changes, not code changes.
+### `etl` — corpus scope
+
+| Key | Default | Description |
+|---|---|---|
+| `youtube_channel_ids` | 16 IDs | Channels to ingest |
+
+Prompts live here alongside the parameters that shape them, so prompt changes are config changes rather than code changes. Two consequences worth knowing:
+
+- **Placeholders are positional contracts.** All four prompts are consumed with `str.format()`, so any literal `{` or `}` added to a prompt raises at call time. The contracts are `{transcript}`/`{chunk}`, `{delimiter}`/`{youtube_search_url}`/`{query}`, and `{context}`/`{query}` — smoke-test a `.format()` after editing.
+- **`reasoning_effort` is model-coupled.** Its valid values depend on `llm` in the same block, which is why the two sit together — changing one without the other is the migration's sharpest edge.
 
 ---
 
 ## Artifacts
 
-DVC-tracked under `artifacts/` (~405 MB, 3 files):
+Three Parquet files, DVC-tracked under `artifacts/`. The corpus grows with every ingest, so treat the size as a few hundred MB rather than a fixed number — `artifacts.dvc` records the exact bytes and hash for whatever commit you're on:
 
 | File | Contents |
 |---|---|
 | `artifacts/data/transcripts.parquet` | `video_id`, `creation_date`, `title`, `transcript` |
-| `artifacts/data/embeddings.parquet` | `video_id`, `chunk_index`, `chunk` (contextualized), `embedding` (JSON) |
+| `artifacts/data/embeddings.parquet` | `video_id`, `chunk_index`, `chunk` (contextualized), `embedding` (`Array(Float32, 768)`) |
 | `artifacts/data/bm25.parquet` | `video_id`, `chunk_index`, `token`, `score` |
 
 `artifacts.dvc` pins the exact content hash, so any historical corpus state is recoverable by checking out that commit and running `dvc pull`.

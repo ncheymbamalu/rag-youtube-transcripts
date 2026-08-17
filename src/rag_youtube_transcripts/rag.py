@@ -1,13 +1,16 @@
 """This module contains functionality for implementing RAG over YouTube video transcripts."""
 
+from pathlib import Path
+
 import polars as pl
 from groq.types.chat import ChatCompletion, ChatCompletionMessage
+from omegaconf import DictConfig
 
 from rag_youtube_transcripts.config import Config
 from rag_youtube_transcripts.utils import GROQ_CLIENT, get_semantic_search_results
 
 
-SYSTEM_PROMPT: str = Config.load_params("rag_system_prompt")
+PARAMS: DictConfig = Config.load_params(Path(__file__).stem)
 
 
 def create_user_prompt(query: str) -> str:
@@ -20,7 +23,8 @@ def create_user_prompt(query: str) -> str:
         str: User prompt.
     """
     try:
-        delimiter: str = Config.load_params("delimiter")
+        user_prompt: str = PARAMS.user_prompt
+        delimiter: str = PARAMS.delimiter
         results: pl.DataFrame = get_semantic_search_results(query)
         context: str = f"\n{delimiter}\n".join(
             f"TITLE: {record.get('title')}\n"
@@ -30,61 +34,47 @@ def create_user_prompt(query: str) -> str:
             f"EXCERPT: {record.get('excerpt')}"
             for record in results.to_dicts()
         )
-        user_prompt: str = f"""\
-Use the following information:
-
-```
-{context}
-```
-
-to respond to the query: {query}\
-        """
-        return user_prompt
+        return user_prompt.format(context=context, query=query)
     except Exception as e:
         raise e
 
 
 def generate_response(
     query: str,
-    llm: str = Config.load_params("llm").rag,
-    temperature: float | int = Config.load_params("temperature").rag,
-    max_completion_tokens: int = Config.load_params("max_output_tokens").rag,
-    reasoning_effort: str = Config.load_params("reasoning_effort").rag
+    llm: str = PARAMS.llm,
+    temperature: float | int = PARAMS.temperature,
+    max_completion_tokens: int = PARAMS.max_output_tokens,
+    reasoning_effort: str = PARAMS.reasoning_effort
 ) -> str:
     """Generates a response to the input query.
 
     Args:
         query (str): Input query.
-        llm (str, optional): The LLM used for RAG.
-        Defaults to Config.load_params("llm").rag.
+        llm (str, optional): The LLM used for RAG. Defaults to PARAMS.llm.
         temperature (float | int, optional): Parameter between 0 and 2 inclusive,
         that controls the randomness of the response. The lower the temperature,
-        the more repetitive the response. Defaults to Config.load_params("temperature").rag.
+        the more repetitive the response. Defaults to PARAMS.temperature.
         max_completion_tokens (int, optional): Maximum number of tokens used to create
-        the response. Defaults to Config.load_params("max_output_tokens").rag.
+        the response. Defaults to PARAMS.max_output_tokens.
         reasoning_effort (str, optional): Controls how many internal reasoning tokens the
-        llm generates before producing its response.
-        Defaults to Config.load_params("reasoning_effort").rag
+        llm generates before producing its response. Defaults to PARAMS.reasoning_effort
 
     Returns:
         str: Response.
     """
     try:
+        system_prompt: str = PARAMS.system_prompt
+        system_prompt = system_prompt.format(
+            delimiter=PARAMS.delimiter,
+            youtube_search_url=PARAMS.youtube_search_url,
+            query=query
+        )
+        user_prompt: str = create_user_prompt(query)
         completion: ChatCompletion = GROQ_CLIENT.chat.completions.create(
             model=llm,
             messages=[
-                {
-                    "role": "system",
-                    "content": SYSTEM_PROMPT.format(
-                        delimiter=Config.load_params("delimiter"),
-                        youtube_search_url=Config.load_params("youtube_search_url"),
-                        query=query
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": create_user_prompt(query)
-                }
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
             ],
             temperature=temperature,
             max_completion_tokens=max_completion_tokens,
