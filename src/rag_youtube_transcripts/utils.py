@@ -236,13 +236,13 @@ def encode_transcripts(data: pl.DataFrame) -> pl.DataFrame:
             chunk_overlap=(chunk_size // 10)
         )
         dfs: list[pl.DataFrame] = []
-        for video_id, transcript in enumerate(tqdm(
+        for video_id, transcript in tqdm(
             iterable=zip(data.get_column("video_id"), data.get_column("transcript"), strict=True),
             desc="Splitting transcripts into contextual chunks and generating embeddings for each",
             total=data.height,
             unit="transcript",
             
-        )):
+        ):
             tokens: list[str] = tokenizer.tokenize(transcript)
             if len(tokens) > max_transcript_tokens:
                 tokens = tokens[:max_transcript_tokens]
