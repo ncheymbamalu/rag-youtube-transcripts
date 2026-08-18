@@ -50,30 +50,30 @@ def main() -> None:
         if data.is_empty():
             logger.info("There are no new transcripts. Skipping the embedding process.")
         else:
-            # update `./artifacts/data/embeddings.parquet`
             logger.info("Starting the embedding process...")
             start: float = time.perf_counter()
+
+            # update `./artifacts/data/embeddings.parquet`
+            path: Path = Config.Paths.embeddings
             plan: pl.LazyFrame = (
                 pl.concat(
-                    (
-                        data.pipe(encode_transcripts).lazy(),
-                        pl.scan_parquet(Config.Paths.embeddings)
-                    ),
+                    (data.pipe(encode_transcripts).lazy(), pl.scan_parquet(path)),
                     how="vertical"
                 )
                 .sort("video_id", "chunk_index")
             )
-            sink_atomically(plan, Config.Paths.embeddings)
+            sink_atomically(plan, path)
 
             # update `./artifacts/data/bm25.parquet`
             create_bm25_dataset()
 
             # update `./artifacts/data/transcripts.parquet`
+            path = Config.Paths.transcripts
             plan = (
-                pl.concat((data.lazy(), pl.scan_parquet(Config.Paths.transcripts)), how="vertical")
+                pl.concat((data.lazy(), pl.scan_parquet(path)), how="vertical")
                 .sort("creation_date", "video_id", descending=[True, False])
             )
-            sink_atomically(plan, Config.Paths.transcripts)
+            sink_atomically(plan, path)
 
             logger.info(
                 f"Finished! It took ~{((time.perf_counter() - start)/60):.2f} minutes to index "
