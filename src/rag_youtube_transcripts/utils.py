@@ -185,18 +185,13 @@ def add_context_to_chunk(
     try:
         system_prompt: str = PARAMS.contextual_chunking.system_prompt
         user_prompt: str = PARAMS.contextual_chunking.user_prompt
+        user_prompt = user_prompt.format(transcript=transcript, chunk=chunk)
         reasoning_effort: str = PARAMS.contextual_chunking.reasoning_effort
         completion: ChatCompletion = GROQ_CLIENT.chat.completions.create(
             model=llm,
             messages=[
-                {
-                    "role": "system",
-                    "content": system_prompt
-                },
-                {
-                    "role": "user",
-                    "content": user_prompt.format(transcript=transcript, chunk=chunk)
-                }
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
             ],
             temperature=temperature,
             max_completion_tokens=max_output_tokens,
@@ -206,7 +201,7 @@ def add_context_to_chunk(
         if choice.finish_reason == "length" or not choice.message.content:
             logger.warning(
                 f"Empty/truncated context (finish_reason={choice.finish_reason}). "
-                f"Using original chunk: {chunk[:80]}..."
+                f"Using original chunk: '{chunk[:80]}...'"
             )
             return chunk
         context: str = choice.message.content.strip().lower()
