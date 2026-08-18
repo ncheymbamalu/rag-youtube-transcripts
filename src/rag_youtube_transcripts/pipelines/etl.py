@@ -50,7 +50,7 @@ def main() -> None:
         if data.is_empty():
             logger.info("There are no new transcripts. Skipping the embedding process.")
         else:
-            logger.info("Starting the embedding process...")
+            logger.info("Starting the indexing process...")
             start: float = time.perf_counter()
 
             # update `./artifacts/data/embeddings.parquet`
