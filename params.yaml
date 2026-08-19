@@ -1,20 +1,18 @@
-utils:
-  youtube_data_api: https://www.googleapis.com/youtube/v3/search
+models:
+  embedding: nomic-ai/modernbert-embed-base
+  reranker: cross-encoder/ms-marco-MiniLM-L-12-v2
+ingest:
   max_transcripts: 50
-  models:
-    embedding: nomic-ai/modernbert-embed-base
-    reranking: cross-encoder/ms-marco-MiniLM-L-12-v2
-  encoding:
-    max_transcript_tokens: 102_400
-    chunk_size: 512
-  contextual_chunking:
+  youtube_data_api: https://www.googleapis.com/youtube/v3/search
+index:
+  chunking:
     llm: openai/gpt-oss-20b
-    temperature: 0.0
     max_output_tokens: 1024
     reasoning_effort: low
     system_prompt: |
         You are an expert in document analysis. Your task is to provide brief, relevant context
         for a chunk of text.
+    temperature: 0.0
     user_prompt: |
       Here is the document:
       <document>
@@ -36,12 +34,15 @@ utils:
       Please provide a short, succinct context to situate this chunk within the overall document
       for the purposes of improving search retrieval of the chunk.
       Respond only with the context.
-  semantic_search:
-    k: 3
-    relevance_threshold: 0.9
+  encoding:
+    chunk_size: 512
+    max_transcript_tokens: 102_400
+retrieval:
+  k: 3
+  relevance_threshold: 0.9
 rag:
+  delimiter: ====================
   llm: qwen/qwen3.6-27b
-  temperature: 0.3
   max_output_tokens: 4096
   reasoning_effort: none
   system_prompt: |
@@ -77,6 +78,7 @@ rag:
     `{youtube_search_url}={query}`.
 
     Your response should be properly formatted and easy to read.
+  temperature: 0.3
   user_prompt: |
     Use the following information:
 
@@ -86,7 +88,6 @@ rag:
 
     to respond to the query: {query}
   youtube_search_url: https://www.youtube.com/results?search_query
-  delimiter: ====================
 etl:
   youtube_channel_ids:
     - UC8wZnXYK_CGKlBcZp-GxYPA

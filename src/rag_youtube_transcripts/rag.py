@@ -7,7 +7,8 @@ from groq.types.chat import ChatCompletion, ChatCompletionMessage
 from omegaconf import DictConfig
 
 from rag_youtube_transcripts.config import Config
-from rag_youtube_transcripts.utils import GROQ_CLIENT, get_semantic_search_results
+from rag_youtube_transcripts.models import GROQ_CLIENT
+from rag_youtube_transcripts.retrieval import get_semantic_search_results
 
 
 PARAMS: DictConfig = Config.load_params(Path(__file__).stem)

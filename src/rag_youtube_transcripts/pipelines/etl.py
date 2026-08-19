@@ -9,8 +9,9 @@ from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
 
 from rag_youtube_transcripts.config import Config
+from rag_youtube_transcripts.index import create_bm25_dataset, encode_transcripts
+from rag_youtube_transcripts.ingest import fetch_transcripts
 from rag_youtube_transcripts.logger import logger
-from rag_youtube_transcripts.utils import create_bm25_dataset, encode_transcripts, fetch_transcripts
 
 
 PARAMS: DictConfig = Config.load_params(Path(__file__).stem)
@@ -26,7 +27,7 @@ def sink_atomically(plan: pl.LazyFrame, path: Path) -> None:
         tmp_path.unlink(missing_ok=True)
 
 
-@logger.catch
+@logger.catch(reraise=True)
 def main() -> None:
     """Fetches video transcripts and corresponding metadata from a list of YouTube
     channel IDs, splits the transcripts into contextualized chunks, generates their
@@ -37,15 +38,27 @@ def main() -> None:
     try:
         # fetch the YouTube video transcripts
         youtube_channel_ids: list[str] = OmegaConf.to_container(PARAMS.youtube_channel_ids)
-        dfs: list[pl.DataFrame] = Parallel(n_jobs=-1)(
+        n_channel_ids: int = len(youtube_channel_ids)
+        results: list[pl.DataFrame | None] = Parallel(n_jobs=-1)(
             delayed(fetch_transcripts)(youtube_channel_id)
             for youtube_channel_id in tqdm(
                 iterable=youtube_channel_ids,
                 desc="Fetching YouTube video transcripts",
-                total=len(youtube_channel_ids),
+                total=n_channel_ids,
                 unit="YouTube Channel ID"
             )
         )
+        failed: int = sum(1 for result in results if result is None)
+        dfs: list[pl.DataFrame] = [
+            result for result in results if isinstance(result, pl.DataFrame)
+        ]
+        if not dfs:
+            raise RuntimeError(
+                f"All {n_channel_ids} YouTube channels failed to fetch. "
+                "Check YOUTUBE_DATA_API_KEY and network connectivity."
+            )
+        if failed:
+            logger.warning(f"<red>{failed}</> of {n_channel_ids} channels failed to fetch.")
         data: pl.DataFrame = pl.concat(dfs, how="vertical")
         if data.is_empty():
             logger.info("There are no new transcripts. Skipping the embedding process.")
@@ -54,26 +67,30 @@ def main() -> None:
             start: float = time.perf_counter()
 
             # update `./artifacts/data/embeddings.parquet`
-            path: Path = Config.Paths.embeddings
-            plan: pl.LazyFrame = (
+            (
                 pl.concat(
-                    (data.pipe(encode_transcripts).lazy(), pl.scan_parquet(path)),
+                    [
+                        data.pipe(encode_transcripts).lazy(),
+                        pl.scan_parquet(Config.Paths.embeddings)
+                    ],
                     how="vertical"
                 )
                 .sort("video_id", "chunk_index")
+                .pipe(sink_atomically, Config.Paths.embeddings)
             )
-            sink_atomically(plan, path)
 
             # update `./artifacts/data/bm25.parquet`
-            create_bm25_dataset()
+            create_bm25_dataset().pipe(sink_atomically, Config.Paths.bm25_data)
 
             # update `./artifacts/data/transcripts.parquet`
-            path = Config.Paths.transcripts
-            plan = (
-                pl.concat((data.lazy(), pl.scan_parquet(path)), how="vertical")
+            (
+                pl.concat(
+                    [data.lazy(), pl.scan_parquet(Config.Paths.transcripts)],
+                    how="vertical"
+                )
                 .sort("creation_date", "video_id", descending=[True, False])
+                .pipe(sink_atomically, Config.Paths.transcripts)
             )
-            sink_atomically(plan, path)
 
             logger.info(
                 f"Finished! It took ~{((time.perf_counter() - start)/60):.2f} minutes to index "
