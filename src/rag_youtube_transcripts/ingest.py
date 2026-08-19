@@ -26,9 +26,9 @@ PARAMS: DictConfig = Config.load_params(Path(__file__).stem)
 def fetch_transcripts(
     youtube_channel_id: str,
     max_transcripts: int = PARAMS.max_transcripts,
-) -> pl.DataFrame:
+) -> pl.DataFrame | None:
     """Fetches YouTube video transcripts and corresponding metadata from the YouTube
-    Data GET endpoint and returns a pl.DataFrame.
+    Data GET endpoint.
 
     Args:
         youtube_channel_id (str): ID of the YouTube channel whose video transcripts
@@ -37,8 +37,10 @@ def fetch_transcripts(
         Defaults to PARAMS.max_transcripts.
 
     Returns:
-        pl.DataFrame: YouTube video transcripts and corresponding metadata, that is,
-        video ID, creation date, and title.
+        pl.DataFrame | None: YouTube video transcripts and corresponding metadata, that is,
+        video ID, creation date, and title. Returns None when the fetch fails, since
+        @logger.catch logs the exception and substitutes None rather than propagating it,
+        so that one bad channel doesn't cancel the others.
     """
     try:
         video_ids: set[str] = set(pl.read_parquet(Config.Paths.transcripts).get_column("video_id"))
@@ -46,6 +48,7 @@ def fetch_transcripts(
             "key": os.getenv("YOUTUBE_DATA_API_KEY", ""),
             "channelId": youtube_channel_id,
             "part": ["snippet", "id"],
+            "type": "video",
             "order": "date",
             "maxResults": max_transcripts
         }
@@ -57,52 +60,59 @@ def fetch_transcripts(
         })
         with Client() as client:
             response: Response = client.get(PARAMS.youtube_data_api, params=params)
-            if response.status_code == 200:
-                records: list[dict[str, datetime | str]] = []
-                for item in response.json().get("items"):
-                    video_id: str = item.get("id").get("videoId")
-                    creation_date: str = item.get("snippet").get("publishedAt")
-                    title: str = item.get("snippet").get("title")
-                    record: list[datetime | str] = [
-                        video_id,
-                        datetime.strptime(creation_date, "%Y-%m-%dT%H:%M:%S%z"),
-                        title,
-                    ]
-                    if video_id in video_ids:
-                        transcript: str = "skip"
-                        logger.info(f"Skipping <green>{title}</>. Transcript already fetched.")
-                    else:
-                        try:
-                            transcript = " ".join(
-                                snippet.text.strip().lower()
-                                for snippet in YouTubeTranscriptApi().fetch(video_id)
-                            )
-                            logger.info(
-                                f"SUCCESS: The transcript for <green>{title}</> has been fetched."
-                            )
-                        except Exception:
-                            transcript = "skip"
-                            logger.info(f"Skipping <green>{title}</>. Transcript is unavailable.")
-                    record.append(transcript)
-                    records.append(dict(zip(schema.names(), record, strict=True)))
-                data: pl.DataFrame = (
-                    pl.DataFrame(records)
-                    .with_columns(
-                        pl.col(col)
-                        .str.replace_all(r"\s{2,}", " ")
-                        .str.replace_many(
-                            ["&#39;", "&quot;", "&amp;"],
-                            ["'", "'", "&"]
-                        )
-                        for col in ("title", "transcript")
-                    )
-                    .filter(pl.col("transcript").ne("skip"))
+            if response.status_code != 200:
+                raise RuntimeError(
+                    f"YouTube Data API returned {response.status_code} for channel "
+                    f"{youtube_channel_id}: {response.text[:200]}"
                 )
-                return data
-            logger.info(
-                "Invalid request. Unable to access videos from the YouTube channel ID, "
-                f"<green>{youtube_channel_id}</>"
+            records: list[dict[str, datetime | str]] = []
+            for item in response.json().get("items", []):
+                video_id: str = item.get("id", {}).get("videoId", "")
+                creation_date: str = item.get("snippet", {}).get("publishedAt", "")
+                title: str = item.get("snippet", {}).get("title", "")
+                if any(v == "" for v in (video_id, creation_date, title)):
+                    logger.warning(
+                        f"Unexpected item from channel <green>{youtube_channel_id}</> "
+                        f"(kind={item.get('id', {}).get('kind', 'unknown')}); skipping."
+                    )
+                    continue
+                if video_id in video_ids:
+                    logger.info("Skipping <green>{}</>. Transcript already exists.", title)
+                    continue
+                try:
+                    transcript: str = " ".join(
+                        snippet.text.strip().lower()
+                        for snippet in YouTubeTranscriptApi().fetch(video_id)
+                    )
+                except Exception:
+                    logger.info("Skipping <green>{}</>. Transcript is unavailable.", title)
+                    continue
+                if not transcript.strip():
+                    logger.info("Skipping <green>{}</>. Transcript is empty.", title)
+                    continue
+                logger.info("SUCCESS: Transcript for <green>{}</> has been fetched.", title)
+                record: list[datetime | str] = [
+                    video_id,
+                    datetime.strptime(creation_date, "%Y-%m-%dT%H:%M:%S%z"),
+                    title,
+                    transcript
+                ]
+                records.append(dict(zip(schema.names(), record, strict=True)))
+            if not records:
+                logger.info(f"No new transcripts for channel <green>{youtube_channel_id}</>.")
+                return pl.DataFrame(schema=schema)
+            data: pl.DataFrame = (
+                pl.DataFrame(records)
+                .with_columns(
+                    pl.col(col)
+                    .str.replace_all(r"\s{2,}", " ")
+                    .str.replace_many(
+                        ["&#39;", "&quot;", "&amp;"],
+                        ["'", "'", "&"]
+                    )
+                    for col in ("title", "transcript")
+                )
             )
-            return pl.DataFrame(schema=schema)
+            return data
     except Exception as e:
         raise e

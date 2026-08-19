@@ -268,14 +268,22 @@ fi
 
 `exec` applies the redirection to the shell itself, so every command below inherits it — including `dvc`, `git`, and `make`, whose output would otherwise go to cron's mail and effectively vanish. There's no way to add a command later that silently bypasses the log. Since nobody is watching at midnight, `logs/cron_<timestamp>.log` is the only record a run happened at all.
 
-`logs/` holds two families of file written by two different processes, and each is pruned by whoever creates it:
+`logs/` holds two families of file, written by different mechanisms but pruned by one:
 
-| File | Written by | Retention |
+| File | Written by | Contains |
 |---|---|---|
-| `file_<timestamp>.log` | Loguru's file sink | `retention="2 days"` in `logger.py` |
-| `cron_<timestamp>.log` | Shell redirection in the wrapper | `find … -delete` in the wrapper |
+| `file_<timestamp>.log` | Loguru's file sink | Application events at DEBUG |
+| `cron_<timestamp>.log` | Shell redirection in the wrapper | Everything: the above plus `dvc`, `git`, and `make` output |
 
-The split is not redundancy. Loguru's retention globs a pattern derived from its own sink template — `file_*.log` — so it never sees the cron logs and could not prune them even in principle. The wrapper prunes its own before each run rather than after, so cleanup still happens on a night the pipeline fails.
+```bash
+find "${LOGS_DIR}" \( -name 'cron_*.log' -o -name 'file_*.log' \) -type f -mtime +6 -delete
+```
+
+**Retention deliberately lives in the wrapper, not in the sink.** Loguru's own `retention=` argument runs at process exit and globs the log directory — and because `Parallel(n_jobs=-1)` spawns loky workers that re-import `logger.py`, every worker configured a file sink and ran its own retention pass. Those passes raced: one process would `os.stat` a file another had already deleted, producing `FileNotFoundError` in an `atexit` callback on every run. Harmless, but noise on a log you want to be able to trust at a glance.
+
+Moving the prune into the wrapper leaves exactly one process doing it, before the pipeline starts rather than after — so cleanup still happens on a night the run fails.
+
+A side effect worth knowing: those same workers each still create a `file_*.log`, so a run produces one per worker plus one for the parent. The content is duplicated into `cron_*.log` anyway, since spawned children inherit the redirected stderr, so nothing is lost — there are simply more files than runs. Guarding the sink with `multiprocessing.parent_process() is None` would collapse it to one per run.
 
 ---
 
@@ -349,7 +357,7 @@ Interactive docs are served at `/docs` (`http://localhost:8080/docs` in Docker, 
 .
 ├── src/rag_youtube_transcripts/
 │   ├── config.py              # Config.Paths + OmegaConf params loader
-│   ├── logger.py              # Loguru: stderr INFO + rotating DEBUG file, 2-day retention
+│   ├── logger.py              # Loguru: stderr at INFO, timestamped file at DEBUG
 │   ├── models.py              # shared expensive objects: encoders, Groq client, knowledge base
 │   ├── ingest.py              # fetch transcripts + metadata (no model dependencies)
 │   ├── index.py               # contextual chunking, embeddings, BM25 scoring

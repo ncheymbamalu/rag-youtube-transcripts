@@ -61,7 +61,7 @@ def main() -> None:
             logger.warning(f"<red>{failed}</> of {n_channel_ids} channels failed to fetch.")
         data: pl.DataFrame = pl.concat(dfs, how="vertical")
         if data.is_empty():
-            logger.info("There are no new transcripts. Skipping the embedding process.")
+            logger.info("There are no new transcripts. Skipping the indexing process.")
         else:
             logger.info("Starting the indexing process...")
             start: float = time.perf_counter()

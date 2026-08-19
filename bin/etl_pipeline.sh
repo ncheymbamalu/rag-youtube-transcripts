@@ -37,8 +37,8 @@ else
     exec >> "$LOG_FILE" 2>&1
 fi
 
-# Prune cron logs older than a week
-find "${LOGS_DIR}" -name 'cron_*.log' -type f -mtime +6 -delete
+# Prune all logs older than a week
+find "${LOGS_DIR}" \( -name 'cron_*.log' -o -name 'file_*.log' \) -type f -mtime +6 -delete
 
 # Pull the current artifacts
 # NOTE: if the artifacts can't be retrieved, then the pipeline will not be executed
